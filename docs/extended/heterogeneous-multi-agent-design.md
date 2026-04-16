@@ -62,182 +62,142 @@
 
 #### 1.3.1 已有能力及需要调整的部分
 
-| 模块 | 已有能力 | 需要调整/扩展的部分 |
-|------|---------|---------------------|
-| **Agent Loop（engine/query.py）** | 观察→推理→行动循环<br>流式事件输出<br>工具并行执行 | ⚠️ 需要**提取核心Loop逻辑**封装为`UnifiedAgentLoop`<br>⚠️ 需要支持**热插拔三层组件**（Perception/Reasoning/Action）<br>⚠️ 当前Loop是文本对话专用，需要抽象为通用框架 |
-| **多Agent协调（swarm/）** | subprocess/in_process/tmux/iterm2后端<br>Team/Teammate概念<br>Mailbox消息系统 | ⚠️ 需要扩展`spawn_agent`工具支持**agent_type参数**<br>⚠️ 需要扩展Mailbox支持**Master↔Agent双向通信**<br>⚠️ 需要增加框架层**自动上报机制**（不仅是Agent主动发送）<br>✅ 后端复用，生命周期管理复用 |
-| **后台任务（tasks/）** | BackgroundTaskManager<br>stdin/stdout通信<br>任务ID管理 | ✅ 可直接复用作为CLI Agent的基础设施<br>⚠️ 需要扩展支持其他Agent类型的启动（UI/Mobile/Browser）<br>⚠️ 需要增加**Agent状态查询接口** |
-| **通信机制** | StreamEvent流（主Agent内部）<br>Mailbox（子Agent间）<br>Channel Bus | ⚠️ 需要**统一为UnifiedMessageBus**<br>⚠️ 需要支持**消息类型扩展**（status/progress/error/query）<br>⚠️ 需要支持**广播和点对点**两种模式 |
-| **工具系统（tools/）** | 43+工具实现<br>MCP协议支持 | ⚠️ 需要增加`spawn_agent`的**agent_type参数**<br>⚠️ 需要新增`query_agent_status`工具<br>⚠️ 需要新增`send_message_to_agent`工具<br>⚠️ 需要新增`report_error`工具 |
-| **Prompt系统（prompts/）** | System Prompt组装<br>上下文管理 | ⚠️ 需要增加**任务分解指导**<br>⚠️ 需要增加**并行执行指导**<br>⚠️ 需要增加**CLI任务执行方式选择指导** |
-| **集成入口** | `cli.py`启动入口<br>`runtime.py`运行时构建 | ⚠️ 增加`--enable-extended`参数<br>⚠️ **扩展RuntimeBundle**加载extended组件（详见4.2节）<br>⚠️ 保持向后兼容（不启用时不加载extended） |
+本节从“哪些地方应复用、哪些地方才值得扩展”的角度评估现有代码。
+
+| 模块 | 已有能力 | 推荐策略 |
+|------|---------|---------|
+| **Agent主循环（`engine/query.py` / `engine/query_engine.py`）** | 已具备稳定的对话循环、工具调用、流式事件与上下文处理能力 | **优先复用**。`extended` 不应复制一套文本 Agent 主循环；只有遇到截图、DOM、设备控制等异构输入/动作时，才在外层增加编排或适配 |
+| **多 Agent 协调（`swarm/`）** | 已有后端启动能力、Mailbox、Team/Teammate 概念 | **在其上扩展**。优先复用后端与生命周期管理；消息能力以适配器方式增强，但保持 Mailbox 为主事实来源 |
+| **后台任务（`tasks/`）** | `BackgroundTaskManager`、任务 ID、stdout/stderr 聚合 | **直接复用** 作为 CLI 类 Agent 的基础设施；异构 Agent 只补自己的输入/输出适配 |
+| **工具系统（`tools/`）** | 已有完善的工具抽象、注册与 MCP 能力 | **沿现有注册体系接入**。新增多 Agent 工具优先做成额外工具或插件，不重写注册主流程 |
+| **插件系统（`plugins/`）** | 已支持插件发现、加载、命令、skills、agents、hooks、MCP | **首选扩展入口**。如果 `extended` 能以插件目录或额外根目录挂载，就不要先改核心入口 |
+| **运行时构建（`ui/runtime.py`）** | `build_runtime(...)` 已支持 `extra_skill_dirs`、`extra_plugin_roots` | **首选集成点**。先利用现有参数挂载扩展能力，再考虑是否需要新增薄封装 |
+| **Prompt/Skill 系统** | 已支持 System Prompt 组装、Skill 注册、上下文注入 | **增量追加**。扩展优先通过新增 prompt 片段、skill、agent 定义实现，而非替换整套 prompt 生成逻辑 |
+| **CLI 入口（`cli.py`）** | 完整的启动参数与交互入口 | **最后才动**。仅当现有运行时参数无法满足扩展接入时，才做极小范围入口增量 |
 
 #### 1.3.2 模块设计与解耦策略
 
-**设计原则**：尽量将新功能放在`extended/`目录下，最小化对OpenHarness核心代码的改动，便于与上游同步。
+**核心原则**：`extended/` 应该是 OpenHarness 的**外挂能力层**，而不是一套“看起来目录独立、实际上把核心能力又写了一遍”的平行实现。
 
-**新建模块（完全独立，放在extended目录）**：
+为兼顾“解耦”和“享受上游演进”，需要把模块分成三类：
 
-| 模块 | 路径 | 描述 | 优先级 |
-|------|------|------|--------|
-| 统一Agent Loop | `extended/engine/unified_loop.py` | 三层热插拔的Agent Loop框架 | P0 |
-| 三层抽象接口 | `extended/agents/base.py` | PerceptionProvider/ReasoningEngine/ActionExecutor | P0 |
-| CLI Agent实现 | `extended/agents/cli/` | CLI Agent的三层具体实现 | P0 |
-| PC UI Agent实现 | `extended/agents/pc/` | PC UI Agent的三层实现 | P1 |
-| Mobile Agent实现 | `extended/agents/mobile/` | Mobile Agent的三层实现 | P1 |
-| Browser Agent实现 | `extended/agents/browser/` | Browser Agent的三层实现 | P1 |
-| 统一消息总线 | `extended/bus/unified_bus.py` | 扩展Mailbox的双向通信 | P0 |
-| Agent生命周期 | `extended/lifecycle/manager.py` | 封装现有生命周期管理 | P0 |
-| 进度监控 | `extended/monitor/progress.py` | 多Agent进度聚合 | P1 |
+**A. 尽量独立放在 `extended/` 的内容**
 
-**扩展现有模块（最小化改动，使用继承/组合）**：
+| 模块 | 建议路径 | 说明 |
+|------|------|------|
+| 异构 Agent 定义与工厂 | `extended/agents/` | 管理 CLI、PC、Mobile、Browser 等 Agent 的差异化实现 |
+| 感知/动作适配器 | `extended/agents/*/` | 截图、DOM、ADB、Playwright、桌面输入等特有能力应独立于核心 |
+| 扩展工具 | `extended/tools/` | 例如 `spawn_agent` 的异构扩展、状态查询、消息发送、监控工具 |
+| 编排与适配层 | `extended/bus/`、`extended/lifecycle/` | 负责把异构能力接到现有运行时，而不是替代运行时 |
+| 扩展 prompt / skills / agents | `extended/prompts/`、`extended/skills/`、插件目录 | 通过配置和注册影响模型行为，保持与核心主循环解耦 |
 
-| 现有模块 | 扩展方式 | 改动内容 |
-|---------|---------|---------|
-| `tools/agent_tool.py` | 继承扩展 | 创建`extended/tools/spawn_agent_tool.py`，继承并添加`agent_type`参数 |
-| `swarm/mailbox.py` | 组合扩展 | 创建`extended/bus/mailbox_adapter.py`，包装并扩展Mailbox功能 |
-| `prompts/system_prompt.py` | 配置扩展 | 创建`extended/prompts/extended_system_prompt.py`，添加额外指导 |
-| `cli.py` | 入口扩展 | 创建`extended/cli_ext.py`，添加extended专用命令行参数 |
+**B. 应优先复用上游的内容**
 
-**复用无需改动的模块**：
-- ✅ `tasks/manager.py` - 直接复用
-- ✅ `swarm/backends/` - 直接复用
-- ✅ `api/` - 直接复用
-- ✅ `tools/registry.py` - 直接复用
-- ✅ `engine/query.py` - 参考其Loop逻辑，但不直接修改
+- `src/openharness/ui/runtime.py` 的运行时构建与额外根目录挂载能力
+- `src/openharness/plugins/` 的插件发现与加载能力
+- `src/openharness/coordinator/agent_definitions.py` 的 Agent 定义合并逻辑
+- `src/openharness/tools/` 的工具抽象与注册机制
+- `src/openharness/engine/` 的文本推理主干、Provider 与会话管理
+- `src/openharness/tasks/`、`src/openharness/swarm/backends/` 的任务和后端能力
 
-#### 1.3.3 与上游OpenHarness的同步策略
+**C. 允许触碰但必须严格控边界的热点区域**
 
-**解耦原则**：
-1. **不修改OpenHarness核心文件**：除非绝对必要，否则不改动`src/openharness/`下的现有文件
-2. **使用继承和组合**：通过继承现有类或包装现有功能来扩展
-3. **配置驱动**：通过配置文件和依赖注入集成，而非硬编码
-4. **插件化设计**：extended模块作为OpenHarness的插件运行
+| 热点区域 | 原则 |
+|---------|------|
+| `cli.py` | 只允许增加极薄入口或参数透传，不在这里堆异构逻辑 |
+| `ui/runtime.py` | 尽量通过现有参数扩展；若必须加钩子，应集中在极少数行并可单独回滚 |
+| `swarm/mailbox.py` 契约 | 可以适配，不应分叉出第二套权威消息存储 |
+| `engine/query.py` | 可以参考、调用、组合；不应复制出长期维护的同构循环 |
 
-**同步便利性**：
-- `sync-upstream.bat`可以安全地合并OpenHarness更新
-- extended目录独立，不会与上游代码冲突
-- 只有明确的扩展点（如工具注册、prompt组装）会与上游交互
-- 使用版本兼容性检查，确保扩展与上游API兼容
+#### 1.3.3 与上游 OpenHarness 的同步策略
 
-**冲突处理预案**：
-- 如果上游大幅重构了Loop逻辑，我们需要同步调整`extended/engine/unified_loop.py`
-- 如果上游修改了Mailbox API，我们需要同步调整`extended/bus/mailbox_adapter.py`
-- 核心设计（三层热插拔、双向通信）在extended中独立维护
+**推荐路径（按优先级排序）**：
 
-**注**：关于任务规划能力，决定采用**模型自主决策**方式（通过System Prompt引导），不额外开发显式TaskPlanner模块。详见第8节讨论记录8.1。
+1. **插件化接入**：优先把 `extended` 做成独立插件、额外 skill 目录或额外 plugin root。
+2. **薄适配层接入**：在 `extended/` 内包装已有运行时、工具注册、Mailbox 或 Agent 定义，不直接改核心实现。
+3. **窄缝入口改动**：只有在前两步无法满足需求时，才在 `cli.py` / `runtime.py` 做最小增量接入。
+
+**明确不推荐的做法**：
+
+- 复制 `engine/query.py` 并长期在 `extended` 中维护第二套文本主循环
+- 复制 `ui/runtime.py` 或在其旁边维护同等职责的完整运行时
+- 为了扩展方便而在 `cli.py` 中加入大量 `if extended_enabled` 分支
+- 在消息层同时维护 Mailbox 和独立内存队列两套真相来源
+
+**同步时应重点关注的兼容面**：
+
+- Loop 行为变更：如果上游调整工具调用或流式事件语义，优先修改适配层，而不是补丁式继续分叉
+- Runtime 参数变更：如果 `build_runtime(...)` 参数或初始化顺序变化，应优先跟随上游接口
+- 插件/工具契约变更：若上游调整 manifest、tool schema、agent registry，扩展侧应优先兼容这些入口
+- Mailbox / Swarm API 变更：消息扩展必须建立在上游契约之上，避免出现双轨协议
+
+**注**：任务规划能力仍采用**模型自主决策**方式，通过 System Prompt 与工具组合引导模型做任务拆解；若未来上游出现更成熟的 Planner 能力，应优先复用而不是再造一套。详见第 8 节。
 
 ## 2. 方案设计
 
-### 2.1 核心设计思想：统一的Agent Loop + 三层热插拔
+### 2.1 核心设计思想：复用主干能力 + 三层可插拔扩展
 
-**核心洞察**：所有Agent本质上都是 **感知 → 思考 → 行动** 的循环，但**每一层**的实现都可以根据Agent类型定制。
+这一节需要明确区分两件事：
+
+1. **长期架构抽象**：所有 Agent 都可以用“感知 → 推理 → 行动”来理解，因此三层都应具备可插拔能力。
+2. **P0 落地策略**：并不意味着 P0 就要把三层全部从 OpenHarness 中剥离出来重写。优先做法是复用上游主干，把真正异构的部分放到 `extended/`。
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                     Unified Agent Loop                         │
-│                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
-│  │  Perception  │ →  │   Reasoning  │ →  │    Action    │       │
-│  │    感知层     │    │    推理层     │    │    行动层     │       │
-│  └──────────────┘    └──────────────┘    └──────────────┘       │
-│        ↑                  ↑                  ↑                │
-│        │                  │                  │                │
-│        └──────────────────┴──────────────────┘                │
-│                     (三层都可热插拔)                            │
+│                    OpenHarness 主干能力（优先复用）               │
+│  Query loop / QueryEngine / Runtime / Tools / Plugins / Session │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     extended 扩展能力层（按需新增）               │
+│  Perception adapters / Action executors / Prompt policies /     │
+│  Heterogeneous orchestration / Agent-specific tools             │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-**关键理解**：不是只有感知层需要热插拔，**推理层**和**行动层**同样需要针对不同Agent类型定制。
+**核心结论**：
 
-**三层热插拔的具体差异**：
+- 三层抽象是**能力边界**，不是“所有层都必须在 P0 独立实现一遍”的开发要求。
+- 新增 Agent 类型时，通常至少会改**感知层**和**行动层**；推理层是否独立，要看是否需要新的模型类型、动作空间或上下文拼装。
+- 对于纯文本或轻度变体的场景，应尽量继续复用 OpenHarness 现有推理主干，而不是为了抽象完整性另起一套 Loop。
 
-| Agent类型 | 感知层差异 | 推理层差异 | 行动层差异 |
-|-----------|-----------|-----------|-----------|
-| **普通对话** | 上下文历史 | 标准文本推理 | 文本回复 |
-| **CLI Agent** | 命令输出 | Prompt：命令行专家 | Shell执行 |
-| **PC UI Agent** | 屏幕截图 | **视觉+文本推理**<br>Prompt：GUI操作专家<br>模型：GPT-4V | 鼠标/键盘控制 |
-| **Mobile Agent** | 设备截图 | **视觉+文本推理**<br>Prompt：移动端UI专家 | ADB命令 |
-| **Browser Agent** | DOM+截图 | **结构化推理**<br>Prompt：Web自动化专家 | Playwright API |
-| **传感器Agent** | 时序数据 | **数据分析推理** | 控制指令 |
+**三层抽象的职责**：
 
-**三层定制化细节**：
+| 层 | 负责什么 | 在 P0 的推荐策略 |
+|----|---------|----------------|
+| **感知层（Perception）** | 收集上下文、截图、DOM、设备状态、命令输出等输入 | **重点扩展**。这是异构 Agent 差异最大的层，适合优先沉淀到 `extended/agents/*/perception.py` |
+| **推理层（Reasoning）** | Prompt 拼装、模型选择、动作空间约束、计划与决策 | **优先复用，按需增强**。先复用 OpenHarness 现有推理与工具调用能力，仅在视觉、多模态或专用动作空间场景下做定制 |
+| **行动层（Action）** | Shell、鼠标键盘、ADB、Playwright、设备控制等执行能力 | **重点扩展**。把真实异构执行器封装在 `extended/`，避免污染核心工具体系 |
 
-1. **感知层 (PerceptionProvider)**
-   - 输入方式：截图 vs 命令输出 vs DOM树 vs 传感器
-   - 数据格式：PIL.Image vs str vs dict
+**Agent 分类保留两个维度，但聚焦近期实现范围**：
 
-2. **推理层 (ReasoningEngine)**
-   - **Prompt拼装**：不同Agent有不同System Prompt
-     - CLI："你是命令行专家..."
-     - PC UI："你是GUI操作助手，分析截图..."
-     - Browser："DOM结构如下..."
-   - **模型选择**：文本模型(GPT-4) vs 视觉模型(GPT-4V)
-   - **动作空间**：模型输出格式不同
-     - CLI：`{"command": "ls -la"}`
-     - PC UI：`{"action": "click", "x": 100, "y": 200}`
-     - Browser：`{"action": "click", "selector": "#btn"}`
+#### 维度1：设备/交互类型
 
-3. **行动层 (ActionExecutor)**
-   - **执行器**：subprocess vs pynput vs adb vs Playwright
-   - **反馈收集**：返回码 vs 截图验证 vs 设备响应
-   - **错误处理**：命令失败 vs 点击失败 vs 元素找不到
+| Agent类型 | 感知 | 推理 | 行动 | 近期优先级 |
+|-----------|------|------|------|-----------|
+| **普通对话** | 上下文历史、用户输入 | 现有文本推理 | 文本回复、工具调用 | 已有能力 |
+| **CLI Agent** | 命令输出、文件状态 | 以现有推理主干为主 | Shell 命令执行 | P0 |
+| **PC UI Agent** | 截图、窗口状态 | 视觉+文本推理 | 鼠标/键盘控制 | P1 |
+| **Mobile UI Agent** | 手机截图、设备状态 | 视觉+文本推理 | ADB/HDC/Appium | P1 |
+| **Browser Agent** | DOM、页面截图、元素列表 | 结构化/视觉推理 | Playwright API | P1 |
 
-**Agent分类：两个维度**
+更远期的智能眼镜、IoT、车载、无人机等形态仍与这一抽象兼容，但不应在 P0 文档中占据与近期实现同等篇幅，详见第 9 节。
 
-Agent可以从两个维度分类：**设备/交互维度**（从哪感知、如何行动）和**工作机制维度**（如何运行、协作方式）。
+#### 维度2：工作机制类型
 
-#### 维度1：设备/交互类型（Where & How to Interact）
+| 工作机制 | 说明 | 与三层抽象的关系 |
+|---------|------|----------------|
+| **即时响应型** | 收到请求后立即执行并返回 | 标准 Loop |
+| **持续监控型** | 持续采集状态，发现异常后上报或行动 | 感知层是常驻采集，行动层偏通知/处置 |
+| **人机协作型** | Agent 自主执行，但用户可中途介入 | 推理层需要处理打断、消息与恢复 |
+| **批量处理型** | 一次读取大量输入，集中处理后输出 | 感知层偏批量读取，行动层偏汇总提交 |
 
-| Agent类型 | 感知(Perception) | 思考(Reasoning) | 行动(Action) | 典型场景 |
-|-----------|-----------------|-----------------|-------------|---------|
-| **普通对话** | 上下文历史、用户输入 | 标准LLM推理 | 文本回复、工具调用 | 通用问答 |
-| **CLI Agent** | 命令输出、文件状态 | 标准LLM推理 | Shell命令执行 | 编译、脚本、运维 |
-| **PC UI Agent** | 截图 + UI元素识别 | 视觉理解+推理 | 鼠标/键盘操作 | 桌面应用操作 |
-| **Mobile UI Agent** | 手机截图 + 设备状态 | 视觉理解+推理 | 触控操作(adb/appium) | 手机APP测试 |
-| **浏览器Agent** | DOM状态 + 页面截图 | 视觉+结构推理 | 点击/输入/导航 | 网页自动化 |
-| **智能眼镜** | 摄像头画面 + 环境视觉 | 视觉理解+推理 | 语音/手势反馈 | AR助手 |
-| **智能手表** | 传感器数据(心率/步数/位置) | 数据分析推理 | 振动/屏幕显示/语音 | 健康监测 |
-| **IoT设备** | 设备状态(温度/湿度/电量) | 阈值判断/预测 | 控制指令下发 | 智能家居 |
-| **车载系统** | 车辆状态(速度/油量/路况) | 驾驶辅助推理 | 语音提醒/控制 | 智能驾驶 |
-| **无人机** | 摄像头 + GPS + 传感器 | 空间推理+导航 | 飞行控制/拍摄 | 航拍/巡检 |
+**对后续设计的直接约束**：
 
-#### 维度2：工作机制类型（How to Work & Collaborate）
-
-| 工作机制 | 感知特点 | 执行模式 | 适用场景 | 与普通Agent的关系 |
-|---------|---------|---------|---------|------------------|
-| **即时响应型** | 事件触发（用户输入/系统事件） | 收到请求→立即处理→返回结果 | 通用任务处理 | 最常见的基础模式 |
-| **持续监控型** | 7x24持续采集数据流 | 持续运行→阈值判断→异常时行动 | 系统监控、安全监控、健康监测 | 可叠加到CLI/UI等Agent上 |
-| **人机协作型** | 用户输入 + 协作状态 | 自主执行，但用户可随时介入交互 | 需要人类灵活介入的场景 | 可叠加到任何设备类型 |
-| **批量处理型** | 一次性读取大量数据 | 批量处理→汇总结果→统一输出 | 数据分析、日志处理 | 独立任务模式 |
-| **主动探索型** | 自主收集环境信息 | 主动采集→分析→给用户建议 | 智能推荐、用户画像分析 | 持续监控的智能化版本 |
-| **被动服务型** | 等待调用 | 接收到请求→执行→返回 | API服务、工具函数 | 最简化的Agent模式 |
-
-#### 组合示例
-
-实际Agent往往是两个维度的组合：
-
-```
-持续监控 + PC UI = 桌面自动化监控助手
-├─ 感知：截图 + UI状态 + 7x24采集
-├─ 检测：UI异常/性能问题
-└─ 行动：自动修复或报警
-
-人机协作 + Mobile UI = 手机测试协作Agent
-├─ 感知：手机截图 + 测试步骤状态 + 用户输入
-├─ 模式：Agent自主执行测试，测试员可随时介入指导
-└─ 行动：执行触控操作
-
-主动探索 + CLI = 智能运维Agent
-├─ 感知：持续收集服务器日志/指标
-├─ 分析：学习用户习惯，主动发现问题
-└─ 建议：给用户优化建议
-```
-
-**关键优势**：
-- **Loop统一**：核心逻辑不变，只需热插拔感知模块
-- **易于扩展**：新增Agent类型只需实现新的PerceptionProvider
-- **代码复用**：思考层和行动层可复用现有实现
+- 文档里所有“统一 Loop”的表述，都应理解为**统一抽象和编排模型**，而不是承诺脱离 OpenHarness 主干另建一整套运行时。
+- 文档里所有“易于扩展”的表述，都应改成“新增 Agent 类型只实现差异层，能复用的主干能力继续复用”。
+- 若某个设计让 `extended` 需要长期同步 `query.py`、`runtime.py`、`cli.py` 的主要逻辑，那这个设计就不符合本方案的解耦目标。
 
 ### 2.2 统一Agent Loop架构
 
@@ -379,12 +339,16 @@ class ActionExecutor(ABC):
     """
 
     @abstractmethod
-    async def execute(self, thought: Thought) -> ExecutionResult:
+    async def execute(self, actions: list[Action]) -> ActionResult:
         """
         执行操作并收集反馈.
         包括：执行动作 -> 收集结果 -> 错误处理
         """
         pass
+
+
+class ToolBasedActionExecutor(ActionExecutor):
+    """基于现有ToolRegistry的通用行动执行器."""
 
     async def execute(self, actions: list[Action]) -> ActionResult:
         results = []
@@ -714,8 +678,8 @@ class FrameworkReportingManager:
         # 2. 检查是否需要上报给Master（基于配置）
         if self.should_report_to_master(agent_id):
             report = self.generate_report(agent_id)
-            # 插入到Master Agent的消息队列（作为系统事件）
-            await self.insert_to_master_inbox(
+            # 通过Mailbox适配层发给Master视图，而不是维护独立消息真相
+            await self.mailbox_adapter.emit_report_to_master(
                 type="framework_report",
                 agent_id=agent_id,
                 data=report,
@@ -956,33 +920,35 @@ class SendMessageToAgentTool(BaseTool):
 
 ### 3.1 Agent Loop统一架构
 
-**决策**：采用**感知-思考-行动**的统一Loop架构，通过热插拔感知层支持异构Agent
+**决策**：采用**感知-思考-行动**的统一抽象，但在 P0 中坚持“主干复用优先、差异层扩展”的实现策略。
 
 **理由**：
 1. **本质统一**：所有Agent都是观察环境→推理决策→执行行动的循环
-2. **易于扩展**：新增Agent类型只需实现PerceptionProvider
-3. **代码复用**：思考层和行动层可复用现有实现
+2. **扩展有边界**：新增Agent类型应主要实现差异层，而不是复制一套完整主循环
+3. **代码复用**：推理主干、工具调用、运行时与会话能力应尽量复用现有实现
 4. **面向未来**：支持智能眼镜、IoT等新型Agent
 
 **实现要点**：
-- `UnifiedAgentLoop`作为核心框架
-- `PerceptionProvider`作为热插拔接口
-- 工厂模式创建不同类型Agent
+- `UnifiedAgentLoop`更适合作为异构编排抽象，而不是 `query.py` 的平行复制品
+- `PerceptionProvider`、`ReasoningEngine`、`ActionExecutor` 都是可插拔能力边界
+- 工厂模式用于组装不同类型Agent，但优先复用上游已有主干能力
 
 ### 3.2 通信协议选择
 
-**决策**：扩展现有Mailbox文件系统方案
+**决策**：扩展现有 Mailbox 文件系统方案，并保持其为唯一权威消息来源。
 
 **理由**：
 - 已有成熟实现
 - 原子写入保证消息不丢失
 - 支持异步读写
 - 易于调试（可直接查看文件）
+- 避免出现 Mailbox 与扩展侧私有队列双轨并存的问题
 
 **扩展内容**：
 - 增加消息类型字段
 - 增加优先级支持
 - 增加广播机制
+- 通过适配层补充 Master 视角聚合，而不是新建第二套持久化消息系统
 
 ### 3.3 感知层实现策略
 
@@ -1007,964 +973,305 @@ class SendMessageToAgentTool(BaseTool):
 ## 4. 与现有代码的集成点（解耦设计）
 
 **设计原则**：
-1. 尽量将新功能放在`extended/`目录下，保持与OpenHarness核心代码的解耦
-2. 对现有模块的扩展采用继承、组合、适配器模式，而非直接修改
-3. 使用依赖注入和配置驱动的方式集成，便于后续同步上游更新
+1. **先找现有扩展点，再设计新边界**，不要为了目录整洁而绕开 OpenHarness 已经存在的插件、运行时和工具注册能力。
+2. **`extended/` 负责异构差异，核心负责通用主干**。
+3. **所有核心改动都要可枚举、可回滚、可单独审查**，避免“到处加一点 if extended”。
 
-### 4.1 新建模块（extended目录，完全独立）
+### 4.1 集成边界划分
 
-| extended模块 | 功能 | 依赖的OpenHarness模块 |
-|--------------|------|----------------------|
-| `extended/engine/unified_loop.py` | 统一Agent Loop框架 | 参考`engine/query.py`的Loop逻辑，但不直接修改 |
-| `extended/agents/base.py` | 三层抽象接口（Perception/Reasoning/Action） | 独立定义，不依赖现有Agent实现 |
-| `extended/agents/cli/` | CLI Agent三层实现 | 组合使用`tasks/manager.py` |
-| `extended/agents/pc/` | PC UI Agent三层实现 | 独立实现，使用mss/pynput库 |
-| `extended/agents/mobile/` | Mobile Agent三层实现 | 独立实现，使用adb/hdc命令 |
-| `extended/agents/browser/` | Browser Agent三层实现 | 独立实现，使用Playwright |
-| `extended/bus/unified_bus.py` | 统一消息总线 | 适配器模式包装`swarm/mailbox.py` |
-| `extended/lifecycle/manager.py` | Agent生命周期管理 | 组合使用`swarm/backends/` |
-| `extended/tools/spawn_agent_tool.py` | 扩展的spawn_agent工具 | 继承并扩展现有AgentTool |
-| `extended/prompts/extended_prompts.py` | 扩展的System Prompt | 配置方式扩展现有prompts |
+| 类型 | 建议放置位置 | 设计原则 |
+|------|-------------|---------|
+| 异构感知与动作实现 | `extended/agents/` | 完全放在扩展侧，避免把截图、ADB、Playwright、桌面自动化等依赖带入核心 |
+| 扩展工具与编排逻辑 | `extended/tools/`、`extended/lifecycle/` | 与现有 `ToolRegistry`、后台任务、Swarm 后端组合，而不是替换这些系统 |
+| 扩展 Prompt / Skill / Agent 定义 | `extended/prompts/`、`extended/skills/`、插件目录 | 优先用配置和注册接入，少改核心代码 |
+| 运行时和插件加载 | `src/openharness/ui/runtime.py`、`src/openharness/plugins/` | **尽量复用**。这部分越保持原样，越容易吃到上游修复和新特性 |
+| 文本主循环、Provider、会话管理 | `src/openharness/engine/`、`src/openharness/api/` | **尽量复用**。除非异构输入/动作无法表达，否则不复制主循环 |
 
-### 4.2 扩展现有模块（最小化改动，使用继承/适配器）
+### 4.2 推荐集成路径：插件挂载优先，入口改动最后
 
-| 现有模块 | 扩展方式 | 改动说明 |
-|---------|---------|---------|
-| `tools/agent_tool.py` | **继承扩展** | 创建`extended/tools/spawn_agent_tool.py`，继承AgentTool并添加`agent_type`参数 |
-| `swarm/mailbox.py` | **适配器模式** | 创建`extended/bus/mailbox_adapter.py`，包装Mailbox并扩展双向通信功能 |
-| `prompts/system_prompt.py` | **配置扩展** | 创建`extended/prompts/extended_prompts.py`，在现有prompt基础上追加extended指导 |
-| `cli.py` | **入口扩展** | 创建`extended/cli_ext.py`，添加`--enable-extended`等参数，主入口判断是否加载extended |
-| `ui/runtime.py` | **运行时扩展** | 创建`extended/runtime_ext.py`，继承RuntimeBundle并添加extended组件 |
+当前仓库已经具备两个很重要的扩展入口：
 
-### 4.3 直接复用无需改动的模块
+- `build_runtime(..., extra_skill_dirs=..., extra_plugin_roots=...)`
+- 插件加载与 Agent 定义合并机制
 
-| 模块 | 复用方式 | 说明 |
+因此推荐集成顺序如下：
+
+1. **把 `extended` 组织成独立包/目录**，里面放异构 Agent、工具、skills、prompt 片段。
+2. **优先通过额外根目录挂载**，让运行时在构建时感知扩展，而不是先去改 `cli.py`。
+3. **只有在确实需要新的用户入口时**，再在核心入口加最小的参数透传或项目侧单独 launcher。
+
+推荐的运行时接入方式如下：
+
+```python
+from pathlib import Path
+
+from openharness.ui.runtime import build_runtime
+
+
+async def build_extended_runtime(project_root: Path):
+    return await build_runtime(
+        extra_plugin_roots=[project_root / "extended" / "plugins"],
+        extra_skill_dirs=[project_root / "extended" / "skills"],
+    )
+```
+
+这种方式的优势是：
+
+- 复用现有 `RuntimeBundle`、插件发现和初始化流程
+- 上游若增强运行时构建逻辑，扩展侧自动受益
+- 不要求在第一阶段就改动 `src/openharness/cli.py`
+
+### 4.3 薄适配层应该做什么
+
+`extended` 仍然需要适配层，但它应该是**薄的**，职责是“接线”，不是“取代主干”。
+
+**推荐保留的适配器/封装**：
+
+| 模块 | 建议职责 | 约束 |
 |------|---------|------|
-| `tasks/manager.py` | 直接导入使用 | CLI Agent的后台执行直接复用 |
-| `swarm/backends/subprocess_backend.py` | 直接导入使用 | Agent启动后端直接复用 |
-| `api/` | 直接导入使用 | LLM API调用直接复用 |
-| `tools/registry.py` | 直接导入使用 | 工具注册机制直接复用 |
-| `config/` | 直接导入使用 | 配置系统直接复用 |
+| `extended/tools/spawn_agent_tool.py` | 在现有工具体系内增加 `agent_type`、扩展配置、状态追踪入口 | 通过工具注册接入，不重写整个工具调度 |
+| `extended/bus/mailbox_adapter.py` | 在 Mailbox 语义上补充 Master/Agent 通信、状态订阅、广播语义 | **Mailbox 仍是主事实来源**，不能再造第二套权威消息队列 |
+| `extended/lifecycle/manager.py` | 复用 `tasks/` 与 `swarm/backends/`，统一封装异构 Agent 的启动、查询、回收 | 只做生命周期编排，不复制上游 backend 执行器 |
+| `extended/engine/unified_loop.py` | 作为异构编排抽象，管理感知/推理/行动层的组合 | 重点是异构输入输出的编排；纯文本决策与工具调用能复用则复用 |
 
-### 4.4 集成架构与实现方案
+**应避免的做法**：
 
-#### 4.4.1 整体架构
+- 以 `ExtendedRuntimeBundle(RuntimeBundle)` 为主路径长期演进
+- 在 `cli.py` 中直接 `try import extended` 并散布扩展判断分支
+- 在消息层引入独立 `_master_inbox` 作为另一套持久真相来源
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    OpenHarness Core                         │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │
-│  │  cli.py      │    │ runtime.py   │    │  swarm/      │   │
-│  │  (入口)       │───→│ (运行时构建)  │───→│  (后端启动)   │   │
-│  └──────────────┘    └──────────────┘    └──────┬───────┘   │
-└─────────────────────────────────────────────────┼───────────┘
-                                                   │
-                                                   ▼
-┌────────────────────────────────────────────────────────────────┐
-│                      extended/  (我们的代码)                     │
-│                                                                │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │               ExtendedRuntimeBundle                     │ │
-│  │  ┌──────────────────────────────────────────────────┐  │ │
-│  │  │           UnifiedAgentLoop (统一Loop框架)         │  │ │
-│  │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐      │  │ │
-│  │  │  │Perception │→ │ Reasoning │→ │  Action   │      │  │ │
-│  │  │  │  (截图等) │  │ (LLM推理)  │  │ (执行操作) │      │  │ │
-│  │  │  └───────────┘  └───────────┘  └───────────┘      │  │ │
-│  │  └──────────────────────────────────────────────────┘  │ │
-│  │                           ↑                           │ │
-│  │                           │ 通过总线通信                │ │
-│  │                           ↓                           │ │
-│  │  ┌──────────────────────────────────────────────────┐  │ │
-│  │  │           UnifiedMessageBus (消息总线)            │  │ │
-│  │  │  ┌────────────────────────────────────────────┐   │  │ │
-│  │  │  │  适配器模式包装 openharness.swarm.mailbox  │   │  │ │
-│  │  │  │  - 支持Master↔Agent双向消息                 │   │  │ │
-│  │  │  │  - 支持广播和点对点                         │   │  │ │
-│  │  │  │  - 支持框架层自动上报                       │   │  │ │
-│  │  │  └────────────────────────────────────────────┘   │  │ │
-│  │  └──────────────────────────────────────────────────┘  │ │
-│  │                           ↑                           │ │
-│  │                           │ 启动和管理                │ │
-│  │                           ↓                           │ │
-│  │  ┌──────────────────────────────────────────────────┐  │ │
-│  │  │         AgentLifecycleManager (生命周期)          │  │ │
-│  │  │  ┌────────────────────────────────────────────┐   │  │ │
-│  │  │  │  组合使用 openharness.swarm.backends       │   │  │ │
-│  │  │  │  - spawn(): 启动Agent子进程               │   │  │ │
-│  │  │  │  - get_status(): 查询状态                  │   │  │ │
-│  │  │  │  - terminate(): 终止Agent                   │   │  │ │
-│  │  │  └────────────────────────────────────────────┘   │  │ │
-│  │  └──────────────────────────────────────────────────┘  │ │
-│  └────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────┘
-```
+如果确实需要项目级入口，优先在项目侧单独提供 `extended/launcher.py` 或脚本，而不是先把核心 CLI 改成扩展感知型。
 
-#### 4.4.2 Runtime扩展模式（推荐）
+### 4.4 Merge Hotspot 与回退策略
 
-通过继承OpenHarness的RuntimeBundle来集成：
+下面这些地方如果动了，不代表不能做，但必须在文档里标红为 merge hotspot：
 
-```python
-# extended/runtime_ext.py
+| 区域 | 风险 | 处理原则 |
+|------|------|---------|
+| `src/openharness/engine/query.py` | 上游主循环演进频繁，最容易出现行为漂移 | 不复制；需要扩展时尽量走组合、钩子、工具或上层编排 |
+| `src/openharness/ui/runtime.py` | 运行时初始化容易随上游变化 | 优先使用现有参数；若新增钩子，改动需集中且可单独 cherry-pick |
+| `src/openharness/cli.py` | CLI 是高频冲突文件 | 只透传参数，不承载异构逻辑本体 |
+| `src/openharness/swarm/mailbox.py` | 涉及协议与存储语义，双轨实现风险高 | 扩展用适配层完成，协议真相保持单一 |
 
-from openharness.ui.runtime import RuntimeBundle
-from extended.engine.unified_loop import UnifiedAgentLoop
-from extended.agents.factory import HeterogeneousAgentFactory
-from extended.bus.unified_bus import UnifiedMessageBus
-from extended.lifecycle.manager import AgentLifecycleManager
+**回退策略**：
 
-class ExtendedRuntimeBundle(RuntimeBundle):
-    """扩展的运行时，支持异构Agent."""
-    
-    def __init__(self, *args, enable_extended=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.enable_extended = enable_extended
-        
-        if enable_extended:
-            # 初始化消息总线（适配器模式包装现有Mailbox）
-            self.message_bus = UnifiedMessageBus(
-                session_id=self.session_id,
-                mailbox=getattr(self, 'mailbox', None)  # 复用现有Mailbox
-            )
-            
-            # 初始化生命周期管理器（组合使用现有后端）
-            self.lifecycle_manager = AgentLifecycleManager(
-                backend_registry=self.backend_registry,
-                message_bus=self.message_bus
-            )
-            
-            # Agent工厂
-            self.agent_factory = HeterogeneousAgentFactory(
-                api_client=self.api_client,
-                message_bus=self.message_bus
-            )
-    
-    async def spawn_heterogeneous_agent(self, agent_type: str, task: str, **kwargs):
-        """启动异构Agent（新增方法）."""
-        if not self.enable_extended:
-            raise RuntimeError("Extended functionality not enabled")
-        
-        return await self.lifecycle_manager.spawn_agent(
-            agent_type=agent_type,
-            task_description=task,
-            **kwargs
-        )
-```
+- 任一扩展入口失效时，核心 OpenHarness 仍应能以原生模式运行。
+- 任一适配层与上游不兼容时，应优先降级为“关闭该扩展能力”，而不是拖垮整个运行时。
+- 所有核心改动都应能单独列出，确保后续同步上游时能快速定位冲突点。
 
-#### 4.4.3 Adapter模式（备选）
+**上游同步检查清单**：
 
-如果不便继承，可使用Adapter包装现有Runtime：
-
-```python
-# extended/adapter.py
-
-class OpenHarnessAdapter:
-    """将UnifiedAgentLoop适配到OpenHarness现有框架."""
-    
-    def __init__(self, runtime_bundle: RuntimeBundle):
-        self.runtime = runtime_bundle
-        # 复用runtime中的组件
-        self.api_client = runtime_bundle.api_client
-        self.tool_registry = runtime_bundle.tool_registry
-        self.backend_registry = getattr(runtime_bundle, 'backend_registry', None)
-    
-    def create_agent(self, agent_type: str, task: str) -> UnifiedAgentLoop:
-        """创建特定类型的Agent."""
-        from extended.agents.factory import HeterogeneousAgentFactory
-        
-        # 根据agent_type创建对应的Perception/Reasoning/Action
-        agent = HeterogeneousAgentFactory.create(
-            agent_type=agent_type,
-            api_client=self.api_client
-        )
-        return agent
-```
-
-#### 4.4.4 消息总线（UnifiedMessageBus）实现
-
-```python
-# extended/bus/unified_bus.py
-
-from openharness.swarm.mailbox import Mailbox
-
-class UnifiedMessageBus:
-    """
-    统一消息总线，包装OpenHarness的Mailbox，扩展双向通信能力.
-    """
-    
-    def __init__(self, session_id: str, mailbox: Optional[Mailbox] = None):
-        self.session_id = session_id
-        # 如果传入现有Mailbox，包装它；否则创建新的
-        self._mailbox = mailbox or Mailbox(session_id)
-        self._master_inbox = []  # Master的消息队列（扩展）
-    
-    async def send_to_agent(self, agent_id: str, message: Message) -> None:
-        """Master发送消息给Agent."""
-        # 使用底层Mailbox
-        await self._mailbox.send(agent_id, message)
-    
-    async def send_to_master(self, agent_id: str, message: Message) -> None:
-        """Agent发送消息给Master（扩展功能）."""
-        message.sender = agent_id
-        message.recipient = "master"
-        self._master_inbox.append(message)
-    
-    async def get_master_messages(self) -> List[Message]:
-        """Master获取发给它的消息（包括框架上报）."""
-        messages = self._master_inbox.copy()
-        self._master_inbox.clear()
-        return messages
-    
-    async def broadcast(self, message: Message) -> None:
-        """广播给所有Agent."""
-        for agent_id in self._mailbox.list_agents():
-            await self.send_to_agent(agent_id, message)
-```
-
-#### 4.4.5 生命周期管理（AgentLifecycleManager）实现
-
-```python
-# extended/lifecycle/manager.py
-
-from openharness.swarm.backends import get_backend_registry
-
-class AgentLifecycleManager:
-    """
-    Agent生命周期管理器.
-    组合使用OpenHarness的swarm/backends/，但提供更高级的接口.
-    """
-    
-    def __init__(self, backend_registry=None, message_bus=None):
-        # 复用OpenHarness的后端注册表
-        self._backends = backend_registry or get_backend_registry()
-        self._message_bus = message_bus
-        self._active_agents: Dict[str, AgentInstance] = {}
-    
-    async def spawn_agent(
-        self,
-        agent_type: str,           # "cli", "pc_ui", "mobile_ui", "browser"
-        task_description: str,
-        cwd: str,
-        model: Optional[str] = None,
-        **kwargs
-    ) -> str:
-        """启动一个Agent."""
-        # 1. 选择后端（复用OpenHarness逻辑）
-        backend = self._backends.get_executor("subprocess")
-        
-        # 2. 构建配置
-        config = TeammateSpawnConfig(
-            name=f"{agent_type}_{uuid.uuid4().hex[:8]}",
-            agent_type=agent_type,
-            prompt=task_description,
-            cwd=cwd,
-            model=model,
-        )
-        
-        # 3. 启动（复用OpenHarness的backend逻辑）
-        result = await backend.spawn(config)
-        agent_id = result.agent_id
-        
-        # 4. 创建Agent实例（使用我们的UnifiedAgentLoop）
-        from extended.agents.factory import HeterogeneousAgentFactory
-        agent = HeterogeneousAgentFactory.create(agent_type, agent_id)
-        self._active_agents[agent_id] = agent
-        
-        return agent_id
-    
-    async def get_status(self, agent_id: str) -> AgentStatus:
-        """查询Agent状态."""
-        agent = self._active_agents.get(agent_id)
-        if not agent:
-            return AgentStatus(status="unknown")
-        return await agent.get_status()
-    
-    async def terminate(self, agent_id: str) -> None:
-        """终止Agent."""
-        agent = self._active_agents.pop(agent_id, None)
-        if agent:
-            await agent.terminate()
-```
-
-#### 4.4.6 集成入口（最小化改动）
-
-```python
-# cli.py 或 runtime.py 中的集成点
-
-# 尝试导入extended模块（如果不存在也不影响核心功能）
-try:
-    from extended.runtime_ext import ExtendedRuntimeBundle
-    EXTENDED_AVAILABLE = True
-except ImportError:
-    EXTENDED_AVAILABLE = False
-
-def build_runtime(enable_extended=False):
-    """构建运行时，支持可选的extended功能."""
-    if enable_extended and EXTENDED_AVAILABLE:
-        # 使用extended运行时
-        return ExtendedRuntimeBundle(enable_extended=True)
-    else:
-        # 使用标准运行时
-        from openharness.ui.runtime import RuntimeBundle
-        return RuntimeBundle()
-
-# 命令行参数扩展（在cli.py中添加）
-@app.callback()
-def main(
-    ctx: typer.Context,
-    enable_extended: bool = typer.Option(
-        False, "--enable-extended",
-        help="启用heterogeneous multi-agent扩展功能"
-    ),
-    # ... 其他参数
-):
-    """启用扩展功能."""
-    if enable_extended:
-        ctx.obj = build_runtime(enable_extended=True)
-```
-
-**好处**：
-- OpenHarness核心代码无需感知extended的存在
-- 用户可以通过`--enable-extended`参数启用扩展功能
-- 即使extended模块有问题，也不会影响核心功能
-- 便于`sync-upstream.bat`安全地合并上游更新
+1. `build_runtime(...)` 的参数、初始化顺序、插件加载时机是否变化
+2. `ToolRegistry`、默认工具注册、插件 manifest 是否新增或变更约束
+3. `agent_definitions`、Agent 注册入口是否调整
+4. `swarm/mailbox.py`、后端执行器、状态查询协议是否发生破坏性变化
+5. 若发生变更，优先修改 `extended` 适配层；只有确认缺少扩展钩子时，才考虑最小核心补丁
 
 ## 5. 实现路径（解耦开发）
 
 **开发原则**：
-- 所有新功能在`extended/`目录下独立开发
-- 每阶段都在独立目录完成，可单独测试
-- 随时可安全同步上游OpenHarness更新
 
-### 5.1 阶段一：建立extended目录 + CLI Agent（2周）
+- 每一阶段都优先验证“能否不改核心入口就接入”。
+- 每一阶段都必须给出**验收标准**和**失败时的降级方案**。
+- 阶段推进顺序以“先打通扩展边界，再增加异构表面” 为准，而不是先铺满所有 Agent 类型。
 
-**目标**：在`extended/`目录下建立基础框架，实现CLI Agent
+### 5.1 阶段一：打通扩展挂载路径 + CLI 最小闭环（P0）
 
-1. **建立目录结构**
-   ```
-   extended/
-   ├── engine/unified_loop.py      # 统一Loop框架
-   ├── agents/
-   │   ├── base.py                  # 三层抽象
-   │   └── cli/
-   │       ├── perception.py        # 命令输出感知
-   │       ├── reasoning.py         # CLI专用推理
-   │       └── action.py            # Shell执行
-   ├── bus/unified_bus.py           # 消息总线
-   └── tools/spawn_agent_tool.py    # 扩展工具
-   ```
+**目标**：在不改或极少改核心入口的前提下，让 `extended` 可以通过额外 plugin root / skill dir 被加载，并跑通最小 CLI Agent 闭环。
 
-2. **实现统一Loop框架**
-   - PerceptionProvider / ReasoningEngine / ActionExecutor 抽象接口
-   - UnifiedAgentLoop 核心循环
+**工作项**：
 
-3. **实现CLI Agent**
-   - 复用`tasks/manager.py`执行命令
-   - 在extended目录下独立实现三层
+1. 建立 `extended/` 基础结构：
+   - `extended/agents/base.py`
+   - `extended/agents/cli/`
+   - `extended/tools/`
+   - `extended/skills/` 或插件目录
+2. 使用 `build_runtime(..., extra_plugin_roots, extra_skill_dirs)` 挂载扩展目录。
+3. 先实现 CLI Agent 的最小能力：
+   - 复用 `tasks/manager.py`
+   - 复用现有推理主干
+   - 仅把 CLI 特有的感知/动作差异放到 `extended`
+4. 补齐 prompt/skill 中关于任务拆解与并行执行的指导。
 
-4. **扩展System Prompt**（`extended/prompts/`）
-   - 任务分解和并行执行指导
-   - CLI任务执行方式选择指导
+**验收标准**：
 
-5. **测试**
-   - 验证extended模块可独立加载
-   - 测试CLI双模式执行
+- 不修改核心 CLI 的情况下，可以通过项目侧入口或运行时构建参数加载 `extended`
+- 可以启动至少一个 CLI 类扩展 Agent，并完成一次任务执行
+- 关闭 `extended` 时，原生 OpenHarness 行为不受影响
 
-### 5.2 阶段二：PC UI Agent（2-3周）
+**失败时的降级方案**：
 
-**目标**：在`extended/agents/pc/`下实现PC UI Agent
+- 若插件挂载不足以表达能力，允许在项目侧增加独立 launcher
+- 仍不建议立即改 `src/openharness/cli.py`
 
-1. **实现PC UI三层**（`extended/agents/pc/`）
-   - `mss_perception.py`：mss截图感知
-   - `pynput_action.py`：鼠标键盘控制
-   - `vision_reasoning.py`：视觉推理（GPT-4V）
+### 5.2 阶段二：补齐消息与生命周期编排（P0 后半）
 
-2. **复用参考实现**
-   - 适配`computer_action_executor.py`核心方法
-   - 包装为ActionExecutor接口
+**目标**：建立可用的多 Agent 控制面，但保持消息与任务的主事实来源仍在上游主干。
 
-3. **测试**
-   - CLI + PC UI并行执行
-   - 主对话本地执行 + PC子Agent并行
+**工作项**：
 
-### 5.3 阶段三：Mobile + Browser Agent（2-3周）
+1. 实现 `extended/bus/mailbox_adapter.py`
+   - 补充 Master/Agent 通信语义
+   - 增加状态订阅、广播、软提醒能力
+2. 实现 `extended/lifecycle/manager.py`
+   - 复用 `tasks/` 与 `swarm/backends/`
+   - 统一启动、查询、终止异构 Agent
+3. 实现配套工具：
+   - `spawn_agent`
+   - `query_agent_status`
+   - `send_message_to_agent`
 
-**目标**：增加Mobile和Browser Agent支持
+**验收标准**：
 
-1. **实现Mobile Agent**（`extended/agents/mobile/`）
-   - `adb_perception.py` / `hdc_perception.py`
-   - `adb_action.py` / `hdc_action.py`
-   - 支持Android和鸿蒙设备
+- 主 Agent 能查询子 Agent 状态并收取框架层上报
+- 至少支持 2 个并行任务同时运行
+- 消息层不存在 Mailbox 之外的第二套权威持久状态
 
-2. **实现Browser Agent**（`extended/agents/browser/`）
-   - `playwright_perception.py`：DOM+截图
-   - `playwright_action.py`：Playwright API
-   - `web_reasoning.py`：Web自动化专用Prompt
+### 5.3 阶段三：扩展异构交互表面（P1）
 
-3. **完整异构测试**
-   - CLI + PC UI + Mobile + Browser同时执行
-   - 测试模型自主决策能力
+**目标**：在已经稳定的扩展边界上增加 PC、Mobile、Browser 三类异构 Agent。
 
-### 5.4 阶段四：集成完善（1-2周）
+**工作项**：
 
-**目标**：完善与OpenHarness集成，确保平滑合并上游
+1. `extended/agents/pc/`
+   - `mss` 截图感知
+   - `pynput` 行动执行
+2. `extended/agents/mobile/`
+   - ADB/HDC 为主
+   - Appium 保持可选
+3. `extended/agents/browser/`
+   - Playwright 感知与行动
+   - 结合 DOM 与截图，而不是纯视觉点击
 
-1. **集成入口**（`extended/`根目录）
-   - `cli_ext.py`：命令行入口扩展
-   - `runtime_ext.py`：运行时扩展
-   - `__init__.py`：模块导出
+**验收标准**：
 
-2. **同步策略验证**
-   - 验证`sync-upstream.bat`可安全合并
-   - 测试extended独立于上游核心代码
-   - 文档化冲突解决预案
+- CLI + 1 个 UI 类 Agent 可并行运行
+- Browser Agent 能稳定执行结构化页面操作
+- 至少一种 UI Agent 能与主 Agent 完成基本消息协同
 
-3. **文档和示例**
-   - 使用文档（如何启用extended）
-   - 典型场景示例
-   - 贡献者指南（如何添加新Agent）
+### 5.4 阶段四：上游同步加固与文档收敛
 
-**预估总时间**：6-8周（核心功能），8-10周（含扩展和完善）
+**目标**：验证该方案在长期维护上成立，而不是仅在本地跑通。
 
-**解耦开发优势**：
-- 每阶段在extended目录独立开发
-- 可随时安全同步上游更新
-- extended未完成时不影响OpenHarness核心
+**工作项**：
+
+1. 梳理所有核心改动点，形成 merge hotspot 清单。
+2. 验证上游同步流程下，哪些改动是无冲突的，哪些需要手工介入。
+3. 补充贡献约束：
+   - 新功能优先放 `extended/`
+   - 任何核心改动必须注明原因与可替代方案
+   - 新增 Agent 类型优先复用主干能力
+
+**验收标准**：
+
+- 可以清晰列出所有核心侵入点
+- 新增扩展能力不会要求同步维护一份平行 `query.py` / `runtime.py`
+- 文档能指导后续贡献者在“解耦”和“跟上游”之间做一致决策
+
+**预估总时间**：6-8 周完成 P0/P1 核心能力，后续再按设备类型逐步扩展。
 
 ## 6. 方案对比
 
-### 方案A：统一Loop架构（采用）
+### 方案A：主干复用优先 + 有界扩展层（采用）
 
-**设计**：统一的感知-思考-行动Loop，通过热插拔感知层支持异构Agent
+**设计**：保留 OpenHarness 的运行时、插件、工具注册和文本推理主干；`extended` 只承载异构感知、动作、编排和增量工具。
 
 **优点**：
-- **架构统一**：所有Agent共享同一套Loop逻辑
-- **易于扩展**：新增Agent类型只需实现PerceptionProvider
-- **代码复用**：思考层和行动层高度复用
-- **面向未来**：天然支持智能眼镜、IoT等新型设备
-- **主对话并行**：主对话可同时执行本地CLI + 并行启动多个子Agent
 
-**缺点**：
-- 需要重构现有query.py提取核心Loop
-- 感知层实现有一定工作量
+- 合并上游成本最低
+- 可以直接受益于上游在运行时、Provider、工具体系上的修复和新能力
+- 仍然保留三层抽象，支持未来继续扩展更多 Agent 类型
 
-### 方案B：独立Loop实现（放弃）
+**代价**：
 
-**设计**：每类Agent独立实现完整的Loop逻辑
+- 需要在设计上持续克制，避免为了“目录独立”滑向主干分叉
+- 某些能力需要通过适配层接入，而不是最短路径直接改核心
+
+### 方案B：`extended` 全量平行实现（放弃）
+
+**设计**：在 `extended/` 中维护完整的 Loop、Runtime、消息系统和入口。
 
 **放弃原因**：
-- 代码重复，维护困难
-- 新增Agent类型工作量大
-- 难以保证行为一致性
 
-### 方案C：显式规划+统一Loop（未来可选）
+- 与上游会越来越像两个项目
+- 会错过上游在 `query.py`、`runtime.py`、插件体系上的持续收益
+- 一旦行为分叉，后续很难判断 bug 应该修哪边
 
-**设计**：在统一Loop基础上，可选地增加TaskPlanner模块
+### 方案C：显式 Planner 作为可选插件（未来可选）
+
+**设计**：当前继续使用模型自主决策；未来若上游出现更成熟的 Planner 或任务图能力，则优先以插件/工具形式复用。
 
 **说明**：
-- 当前采用模型自主决策（无需显式规划）
-- 如果未来OpenHarness增加了TaskPlanner功能，本扩展版本可直接复用
-- 相当于多一个工具，模型愿意用就用，不用就按现有方式自主决策
-- 只要有思考，规划自然会在思考中体现
+
+- 当前不把 Planner 作为 P0 前置条件
+- 未来即使引入 Planner，也应尽量挂在现有主干上，而不是重塑整个架构
+- Planner 更像增强件，不应成为本方案对上游分叉的理由
 
 ## 7. 总结
 
-本方案设计了一个支持异构多Agent并行协作的框架，核心创新点：
+本方案的核心立场是：
 
-1. **统一Agent Loop架构**：感知-思考-行动模式，通过热插拔感知层支持所有Agent类型
-2. **模型自主决策**：通过System Prompt引导模型判断任务依赖，无需显式TaskPlanner
-3. **异构支持**：CLI/UI/Mobile/IoT统一抽象，易于扩展新型Agent
-4. **并行执行**：
-   - 主对话可同时执行本地CLI任务（快速）
-   - 并行启动多个后台子Agent（耗时任务）
-   - 最大化利用OpenHarness的多工具并行机制
-5. **双向通信**：Master和Agents通过统一消息总线实时通信
-6. **面向未来**：架构天然支持智能眼镜、可穿戴设备、IoT等新型Agent
+1. **`extended/` 要独立，但不能变成 OpenHarness 的平行重写版。**
+2. **三层热插拔是长期抽象，不是 P0 就要三层全重写。**
+3. **能复用上游主干的地方尽量复用，只把真正异构的差异沉淀在扩展侧。**
+4. **所有核心侵入点都视为 merge hotspot，并且必须有降级与回退路径。**
+
+这样设计的收益是，既能把新增能力尽量收敛在 `extended/`，也能尽可能持续享受上游 OpenHarness 的实现优化、bug 修复和新功能。
 
 ## 8. 讨论记录
 
-本节记录方案设计过程中的关键讨论和决策。
+本节不再保留冗长的原始讨论过程，只保留会影响实现边界的决策索引。
 
-### 8.1 是否需要TaskPlanner？
+### 8.1 是否需要显式 TaskPlanner
 
-**问题**：是否需要显式的TaskPlanner模块来分解任务和管理依赖？
+**结论**：P0 不引入显式 TaskPlanner，继续采用模型自主决策。
 
-**讨论要点**：
-- 初始方案设计了一个显式TaskPlanner，生成带依赖的DAG执行计划
-- 考虑到模型本身具备推理能力，可以让模型自主判断任务依赖关系
-- OpenHarness的`query.py`已经支持多工具并行执行
+**原因**：
 
-**决策**：**不需要TaskPlanner**，采用模型自主决策
+- OpenHarness 已具备工具调用与并行执行能力
+- 显式 Planner 会扩大系统边界，增加新的同步成本
+- 如果未来上游出现成熟 Planner，应优先复用为插件或工具
 
-**理由**：
-1. **架构简洁**：无需额外的规划模块，复用模型的推理能力
-2. **灵活性高**：模型可以根据实时执行结果动态调整计划
-3. **契合现有架构**：OpenHarness已支持并行工具调用
-4. **自然处理依赖**：模型根据执行历史决定下一步，无需预计算
+### 8.2 CLI 任务在主对话还是子 Agent 执行
 
-**未来兼容性**：
-- 如果未来OpenHarness增加了TaskPlanner功能，本扩展版本可直接复用
-- 相当于多一个工具，模型愿意用就用，不愿意用就按现有方式自主决策
-- 只要有思考，规划自然会在思考中体现
+**结论**：两种方式都保留，由模型根据任务特征选择。
 
-**实现方式**：
-- 通过System Prompt引导模型分析任务依赖
-- 模型并行调用多个`spawn_agent`启动无依赖任务
-- 有依赖的任务，模型等待前置任务完成后再执行
+**规则**：
 
-**示例**：
-```
-用户："构建项目并部署到测试环境"
+- 快速、上下文强相关的命令，优先由主对话直接执行
+- 耗时、可并行、可独立监控的任务，优先交给子 Agent
+- 主对话与子 Agent 可以并行工作，避免主线程空转等待
 
-模型推理：
-1. 任务可分解：本地构建 + 准备部署环境
-2. 这两个任务无数据依赖，可并行
-3. 并行调用：spawn_agent(type="cli", task="构建") + spawn_agent(type="cli", task="准备环境")
-4. 等待两个都完成
-5. 然后执行：spawn_agent(type="cli", task="部署")
-```
+### 8.3 统一 Loop 与三层热插拔的最终解释
 
-### 8.2 CLI任务在主对话还是子Agent执行？
+**结论**：三层热插拔是长期抽象；P0 优先扩展感知层和行动层，推理层尽量复用主干。
 
-**问题**：CLI任务应该由主对话直接执行，还是作为独立子Agent执行？
+**约束**：
 
-**讨论要点**：
-- 初始想法是区分简单/复杂任务：简单任务主对话执行，复杂任务子Agent执行
-- 深入讨论后发现：主对话本身就是一个执行单元，可以同时做多件事
-- 关键洞察：**主对话可以同时执行本地CLI + 并行启动多个后台子Agent**
-
-**决策**：**两种执行方式都支持，由模型自主选择**
-
-**System Prompt指导原则**：
-
-```markdown
-## CLI任务执行方式选择
-
-根据任务特点和当前场景，自主选择执行方式：
-
-### 方式A：主对话直接执行（shell_tool）
-适用场景：
-- 简单、快速完成的命令（如git status, ls, cat）
-- 需要立即看到结果来决定下一步
-- 任务输出需要直接进入当前上下文
-
-### 方式B：子Agent后台执行（spawn_agent(type="cli")）
-适用场景：
-- 耗时较长的任务（编译、测试、下载等）
-- 可以和其他任务并行执行
-- 失败不影响主对话继续
-- 需要独立监控进度
-
-### 并行策略
-主对话可以同时进行：
-1. 自己执行简单CLI任务
-2. 并行启动多个后台CLI子Agent
-3. 并行启动UI类子Agent（PC/Mobile）
-
-最大化利用并行能力，主对话不空闲等待。
-```
-
-**示例场景**：
-
-```
-用户："构建前端项目，同时在手机上测试最新版"
-
-模型决策：
-1. 主对话执行：git status（快速确认分支状态）
-2. 并行启动：
-   - spawn_agent(type="cli", task="npm run build")
-   - spawn_agent(type="mobile_ui", task="安装并测试APP")
-3. 主对话继续：查看build配置是否有问题
-4. 等待后台Agent完成，汇总结果
-```
-
-**优势**：
-1. **最大化并行度**：主对话和多个子Agent同时工作
-2. **灵活性**：模型根据实时情况动态选择
-3. **不浪费资源**：主对话不会空闲等待
-4. **一致性**：CLI子Agent和其他类型子Agent统一管理
-
-### 8.3 统一的Agent Loop架构
-
-**问题**：不同类型Agent（CLI/UI/Mobile）的Loop是否可以统一？
-
-**讨论要点**：
-- 初始思考：每类Agent似乎有不同的Loop逻辑
-- 深入分析：发现所有Agent本质都是**感知 → 思考 → 行动**
-- 差异只在"感知"层的实现方式不同
-
-**核心洞察**：
-
-```
-所有Agent都是：感知 → 思考 → 行动
-
-两个分类维度：
-1. 设备/交互维度（Where）：感知从哪里来，行动到哪里去
-2. 工作机制维度（How）：如何感知、何时思考、怎样行动
-
-维度1 - 设备/交互类型（Where & How to Interact）：
-┌─────────────────────────────────────────────────────┐
-│  Agent类型      │  感知(Perception)                  │
-├─────────────────────────────────────────────────────┤
-│  普通对话        │  上下文历史、用户输入                │
-│  CLI Agent     │  命令输出、文件状态                  │
-│  PC UI         │  截图 + 当前UI状态                   │
-│  Mobile UI     │  手机截图 + 设备状态                 │
-│  浏览器Agent    │  DOM状态 + 页面截图                  │
-│  智能眼镜       │  摄像头拍照 + 环境视觉               │
-│  智能手表       │  传感器数据(心率/步数/温度)          │
-│  IoT设备       │  设备状态(温度/湿度/电量)            │
-│  车载系统       │  车辆状态(速度/油量/路况)            │
-│  无人机        │  摄像头 + GPS + 传感器               │
-└─────────────────────────────────────────────────────┘
-
-维度2 - 工作机制类型（How to Work & Collaborate）：
-┌─────────────────────────────────────────────────────┐
-│  工作机制        │  运行模式                          │
-├─────────────────────────────────────────────────────┤
-│  即时响应型       │  请求→处理→返回（标准模式）            │
-│  持续监控型       │  7x24采集→检测→异常时行动             │
-│  人机协作型       │  自主执行，用户可随时介入交互            │
-│  批量处理型       │  批量读取→分析→汇总输出               │
-│  主动探索型       │  自主收集→分析→主动建议               │
-│  被动服务型       │  等待调用→快速响应                    │
-└─────────────────────────────────────────────────────┘
-
-关键理解：两个维度是正交的，可以组合
-例如：持续监控型 + PC UI = 桌面自动化监控助手
-```
-
-**工作机制的Loop适配**：
-
-所有工作机制都适配统一的感知-思考-行动Loop：
-
-| 工作机制 | 感知 | 思考 | 行动 | Loop适配说明 |
-|---------|------|------|------|-------------|
-| 即时响应型 | 用户请求 | 标准推理 | 返回结果 | 标准Loop |
-| 持续监控型 | 持续数据流 | 阈值/异常判断 | 报警/处置 | 感知层持续采集，思考层检测 |
-| 人机协作型 | 用户输入+协作状态 | 协作流程推理 | 自主执行+响应用户介入 | 用户可随时发消息介入执行过程 |
-| 批量处理型 | 批量数据 | 批量分析 | 汇总输出 | 感知=批量读取 |
-| 主动探索型 | 自主采集信息 | 分析+建议生成 | 主动推送 | 感知层主动收集而非被动等待 |
-| 被动服务型 | API请求 | 快速处理 | 返回结果 | 简化的即时响应 |
-
-**结论**：感知-思考-行动的范式足够通用，所有工作机制都可以映射到这个Loop中。
-
-**补充讨论：Agent分类的两个维度**
-
-在讨论过程中，发现Agent类型可以从两个维度理解：
-
-**维度1：设备/交互类型**（之前主要考虑的）
-- 回答"从哪里感知，如何行动"
-- CLI、PC UI、Mobile UI、浏览器、智能眼镜、IoT、车载系统、无人机等
-
-**维度2：工作机制类型**（讨论深入后补充的）
-- 回答"如何运行，如何协作"
-- 即时响应、持续监控、人机协作（随时可交互）、批量处理、主动探索、被动服务等
-
-**关键理解**：
-- 这两个维度是正交的，可以组合
-- 例如：持续监控 + PC UI = 桌面自动化监控助手
-- 例如：人机协作 + Mobile UI = 可交互的手机测试Agent（测试员可随时介入）
-- 例如：主动探索 + CLI = 智能运维分析Agent
-- 例如：持续监控 + 智能手表 = 24小时健康监测Agent
-
-**补充讨论：三层热插拔的深入理解**
-
-在进一步讨论中发现，不只是感知层需要热插拔，**推理层**和**行动层**同样需要热插拔：
-
-**推理层差异（之前理解不充分）**：
-- **Prompt拼装完全不同**：
-  - CLI Agent："你是命令行专家，擅长使用bash..."
-  - PC UI Agent："你是GUI操作助手，请分析这张截图..."
-  - Browser Agent："DOM结构如下，元素列表：..."
-- **模型选择不同**：文本模型 vs 视觉模型(GPT-4V) vs 专用模型
-- **动作空间不同**：
-  - CLI输出：`{"command": "ls", "args": ["-la"]}`
-  - PC UI输出：`{"action": "click", "x": 100, "y": 200}`
-  - Browser输出：`{"action": "click", "selector": "#submit"}`
-- **上下文构建不同**：是否包含历史截图？是否包含DOM变化？
-
-**行动层差异（之前理解不充分）**：
-- **执行器不同**：subprocess vs pynput vs adb vs Playwright
-- **反馈收集不同**：命令返回码 vs 截图验证 vs 设备响应
-- **错误处理不同**：命令失败重试 vs 点击失败重试 vs 元素找不到处理
-
-**修正后的架构设计**：
-```
-UnifiedAgentLoop:
-  - perception: PerceptionProvider  ← 热插拔点1（CLI/UI/Mobile各有不同）
-  - reasoning: ReasoningEngine    ← 热插拔点2（Prompt/模型/动作空间）
-  - action: ActionExecutor        ← 热插拔点3（Shell/pynput/adb/Playwright）
-```
-
-**三层热插拔示例**：
-
-| Agent | 感知层 | 推理层 | 行动层 |
-|-------|--------|--------|--------|
-| CLI | CommandOutputPerception | StandardReasoning<br>(Prompt: CLI专家) | ShellActionExecutor |
-| PC UI | ScreenshotPerception | VisionEnabledReasoning<br>(Prompt: GUI专家, 模型: GPT-4V) | DesktopActionExecutor<br>(pynput) |
-| Mobile | MobilePerception | VisionEnabledReasoning<br>(Prompt: Mobile专家, 模型: GPT-4V) | MobileActionExecutor<br>(adb) |
-| Browser | BrowserPerception<br>(DOM+截图) | WebAutomationReasoning<br>(Prompt: Web专家, 结构化输出) | BrowserActionExecutor<br>(Playwright) |
-
-**决策**：**采用统一的Agent Loop架构 + 三层热插拔**，每层都可以根据Agent类型定制
-
-**架构优势**：
-1. **Loop统一**：核心流程不变（感知→思考→行动）
-2. **三层热插拔**：感知、推理、行动都可以定制
-3. **灵活组合**：可复用某一层（如多个视觉Agent复用VisionEnabledReasoning）
-4. **易于扩展**：新增Agent类型只需实现差异层
-5. **面向未来**：天然支持所有组合
-
-**代码实现**：详见2.1-2.3节及2.2节的组合示例
+- 不再把“统一 Loop”理解为必须复制一套 `query.py`
+- 新增 Agent 类型实现差异层即可，不追求为抽象完整性重写主干
+- `UnifiedAgentLoop` 若保留，应主要承担异构编排职责
 
 ### 8.4 双向通信机制设计
 
-**问题**：如何实现主Agent和子Agent之间的双向通信？
+**结论**：采用分层通信，但保持 Mailbox 为唯一权威消息来源。
 
-**讨论要点**：
-- 需要支持Agent主动查看其他Agent状态
-- 需要支持Agent主动发送消息给其他Agent
-- 主Agent必须全局把控，普通Agent可以选择不看/不发
-- 即使Agent模型不主动上报，框架也应该记录并定期上报
-- 需要区分模型层（可选）和框架层（硬性）
+**规则**：
 
-**决策**：**分层通信机制**
+- 模型层通信是可选工具能力
+- 框架层上报是硬机制，但应建立在 Mailbox/Swarm 契约之上
+- 不新增另一套独立持久消息队列
+- Master 收到的是聚合视图或派生事件，而不是第二套真相存储
 
-**Layer 1 - 模型层通信（可选）**：
-- 提供工具给Agent模型主动调用：`QueryOtherAgentTool`、`SendMessageToAgentTool`
-- 完全可选，普通Agent可以专注于自己的任务
-- 主Agent例外，必须使用这些工具（对用户负责）
-- 任何Agent都可以查看其他Agent（开放透明）
+### 8.5 设备侧技术路线决策
 
-**Layer 2 - 框架层通信（硬性机制）**：
-- 框架自动记录所有Agent执行过程
-- 定期向Master Agent上报状态快照（可配置频率/内容）
-- 作为**软提醒**插入主Agent消息流，Master可以选择忽略
-- 重要事件（完成/错误/卡顿）立即上报
-- 不写入普通Agent消息通道，只发给Master
+这些技术选型仍有效，但详细对比移交到各自专项文档：
 
-**关键设计原则**：
-1. **不强制普通Agent**：Agent模型可以完全不看/不发，专注于任务
-2. **Master必须知情**：通过框架层硬性机制确保Master掌握全局
-3. **软干预机制**：框架上报是软提醒，Master自主判断是否干预
-4. **可配置**：所有机制都有开关和参数
+- PC UI Agent：采用 `mss + pynput`，详见 [pc-agent-implementation.md](./pc-agent-implementation.md)
+- Mobile UI Agent：第一阶段以 `ADB/HDC` 为主，`Appium` 为可选增强，详见 [mobile-agent-implementation.md](./mobile-agent-implementation.md)
+- Browser Agent：采用 `Playwright`，详见 [browser-agent-implementation.md](./browser-agent-implementation.md)
 
-**配置示例**：
-```yaml
-framework_reporting:
-  enabled: true
-  interval_seconds: 30
-  master_agent:
-    soft_reminder: true  # 作为软提醒插入消息流
-    allow_ignore: true   # Master可以忽略
-```
-
-**上报示例**：
-```
-[System Event] Agent "pc_ui_001": 下载进度45%，运行45秒
-[System Event] Agent "mobile_ui_002": 错误 - 网络连接失败
-```
-
-Master Agent看到后可以：
-- 忽略（觉得正常）
-- 立即干预（询问用户是否重试）
-- 稍后处理（等PC端完成后再处理手机问题）
-
----
-
-### 8.5 Mobile UI Agent实现方案选择
-
-**问题**：Mobile UI Agent应该使用哪种技术方案？ADB、HDC还是Appium？
-
-**候选方案**：
-1. **ADB** (Android Debug Bridge) - Android命令行工具
-2. **HDC** (HarmonyOS Device Connector) - 鸿蒙命令行工具
-3. **Appium** - 跨平台自动化测试框架
-
-**详细对比**：详见 [mobile-agent-implementation.md](./mobile-agent-implementation.md)
-
-**核心差异总结**：
-
-| 维度 | ADB/HDC | Appium |
-|------|---------|--------|
-| 复杂度 | 低 | 高 |
-| 启动速度 | 快（毫秒级） | 慢（秒级） |
-| 元素定位 | 坐标点击 | 丰富的定位方式（ID/XPath等） |
-| 架构要求 | 无额外依赖 | 需要Appium Server |
-| 跨平台 | ADB仅Android，HDC仅鸿蒙 | Android+iOS |
-| 智能等待 | 需自实现 | 原生支持 |
-
-**决策**：**第一阶段采用ADB/HDC为主，可选Appium作为补充**
-
-**理由**：
-1. **架构契合**：ADB/HDC简单直接，与我们的统一Agent Loop架构完美契合
-2. **低延迟**：截图和点击操作延迟低（~100ms），适合实时Loop
-3. **轻量级**：无需维护额外的Appium Server基础设施
-4. **足够使用**：截图+坐标点击+OCR/视觉模型，足以完成大部分UI操作任务
-5. **鸿蒙支持**：同时实现HDC支持，覆盖Android和鸿蒙
-
-**具体实现**：
-- 主要使用`adb shell screencap`截图 + `adb shell input tap`点击
-- 结合视觉模型（GPT-4V）识别截图中的可点击元素坐标
-- 可选使用`uiautomator dump`获取UI层次辅助理解界面
-
-**代码位置**：
-- `extended/agents/mobile/adb_perception.py` - ADB感知层
-- `extended/agents/mobile/adb_action.py` - ADB行动层
-- `extended/agents/mobile/hdc_perception.py` - HDC感知层（鸿蒙）
-- `extended/agents/mobile/hdc_action.py` - HDC行动层（鸿蒙）
-
-**未来扩展**：
-- 如果确实有精确定位元素的需求，可添加Appium作为可选方案
-- 通过工厂模式支持：`MobilePerceptionFactory.create("appium", ...)`
-
----
-
-### 8.6 PC UI Agent实现方案选择
-
-**问题**：PC UI Agent应该使用哪种技术方案？
-
-**候选方案**：
-1. **MSS + pynput**：轻量级，纯Python，跨平台
-2. **PyAutoGUI**：简单易用，功能全面
-3. **Windows API (pywin32)**：功能最强，仅Windows
-4. **Playwright/Selenium**：浏览器为主，桌面支持有限
-
-**参考实现**：用户提供了基于 `mss + pynput` 的实现参考
-- 位置：`D:\repo\public\Mininglamp-AI-mano-skill\mano-skill\visual\computer\`
-- 核心文件：`computer_action_executor.py`, `computer_use_util.py`
-- 技术栈：mss（截图）+ pynput（鼠标/键盘控制）
-
-**详细对比**：详见 [pc-agent-implementation.md](./pc-agent-implementation.md)
-
-**核心对比**：
-
-| 维度 | MSS+pynput | PyAutoGUI | Windows API |
-|------|------------|-----------|-------------|
-| 复杂度 | ⭐ 低 | ⭐ 低 | ⭐⭐⭐ 高 |
-| 性能 | ⚡ 快 | 🐢 一般 | ⚡ 快 |
-| 跨平台 | ✅ Win/Mac/Linux | ✅ Win/Mac/Linux | ❌ 仅Windows |
-| UI元素获取 | ❌ 无 | ⚠️ 图像匹配 | ✅ Accessibility |
-
-**决策**：**采用MSS + pynput方案**
-
-**理由**：
-1. **参考验证**：已有参考实现验证可行
-2. **架构契合**：轻量高效，与统一Agent Loop架构完美契合
-3. **性能优秀**：mss截图速度快（~20ms），满足实时Loop需求
-4. **跨平台**：一套代码支持Windows/Mac/Linux
-5. **足够使用**：截图+坐标点击+视觉模型，能完成大部分UI操作
-
-**技术组合**：
-```
-感知层：mss (截图) + 视觉模型 (理解界面)
-行动层：pynput (鼠标/键盘控制)
-坐标处理：模型输出基于1920x1080，实际按屏幕比例缩放
-```
-
-**重要说明：窗口聚焦问题**
-
-**澄清误解**：pynput**不**需要窗口在后台，键盘输入会进入当前**焦点窗口**。
-
-**具体情况**：
-- **鼠标点击**：可以在任何位置工作，点击会自动聚焦该位置的窗口
-- **键盘输入**：会发送到当前具有键盘焦点的窗口
-
-**解决方案**：
-1. **先点击后输入**：点击目标输入框（聚焦窗口），再输入文字
-2. **使用窗口API**：Windows下可用`SetForegroundWindow`强制聚焦
-3. **这不是严重限制**：只需要正确的操作顺序
-
-**示例操作序列**：
-```
-用户："在记事本中输入Hello"
-
-模型执行：
-1. 截图查看桌面
-2. 识别记事本图标位置 (x1, y1)
-3. 点击图标打开/聚焦记事本
-4. 截图确认记事本已打开
-5. 识别输入框位置 (x2, y2)
-6. 点击输入框（确保聚焦）
-7. 输入 "Hello"
-```
-
-**代码位置**：
-- `extended/agents/pc/mss_perception.py` - 基于mss的感知层
-- `extended/agents/pc/pynput_action.py` - 基于pynput的行动层
-- **可直接复用参考实现**：`computer_action_executor.py`中的核心方法
-
-**关键实现要点**（来自参考实现）：
-1. **坐标缩放**：`_xy()`方法处理不同屏幕分辨率的坐标转换
-2. **平滑移动**：`_mouse_move()`实现鼠标平滑移动动画
-3. **剪贴板输入**：`_type_text()`使用剪贴板粘贴避免输入法问题
-4. **跨平台支持**：根据`platform.system()`使用不同命令
-
-**未来扩展（可选）**：
-- 如果需要UI元素精确识别，可添加Windows Accessibility API（仅Windows）
-- 或者使用OCR+视觉模型识别截图中的元素
-
----
-
-### 8.7 Browser/Web Agent实现方案选择
-
-**问题**：浏览器/Web操控应该使用哪种技术方案？
-
-**候选方案**：
-1. **Playwright**（微软）- 现代、多浏览器、CDP基础
-2. **Selenium**（开源）- 老牌、生态丰富
-3. **Puppeteer**（Google）- Chrome专用、Node.js
-4. **CDP原生** - 最底层、需自行封装
-
-**详细对比**：详见 [browser-agent-implementation.md](./browser-agent-implementation.md)
-
-**核心对比**：
-
-| 维度 | Playwright | Selenium | Puppeteer | CDP原生 |
-|------|------------|----------|-----------|---------|
-| 性能 | ⚡ 快 | 🐢 一般 | ⚡ 快 | ⚡ 最快 |
-| 浏览器支持 | Chromium/Firefox/WebKit | 几乎所有 | 仅Chrome | 仅Chrome |
-| Python支持 | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ Pyppeteer | ⭐⭐ |
-| API现代性 | ⭐⭐⭐ 自动等待 | ⭐⭐ 手动等待 | ⭐⭐⭐ | ⭐ |
-| 元素信息 | ⭐⭐⭐ 丰富 | ⭐⭐ 一般 | ⭐⭐⭐ | ⭐⭐ |
-
-**决策**：**采用Playwright**
-
-**理由**：
-1. **最适合AI Agent场景**：可以直接获取可交互元素列表（带坐标、文本、类型），LLM无需OCR即可理解页面
-2. **技术现代**：自动等待、智能重试、减少错误
-3. **架构契合**：支持async/await，完美适配UnifiedAgentLoop
-4. **多浏览器**：Chromium/Firefox/WebKit，不只是Chrome
-5. **性能优秀**：基于CDP，速度快
-
-**关键优势（相比PC/Mobile Agent）**：
-```
-PC/Mobile Agent: 截图 → AI视觉识别 → 坐标点击
-Browser Agent:   DOM树 + 元素列表 → 直接精准操作
-```
-
-**技术组合**：
-```
-感知层：Playwright (截图 + query_selector_all获取元素列表)
-行动层：Playwright API (goto, click, fill, scroll等)
-```
-
-**代码位置**：
-- `extended/agents/browser/playwright_perception.py` - 基于Playwright的感知层
-- `extended/agents/browser/playwright_action.py` - 基于Playwright的行动层
-
-**示例使用**：
-```python
-spawn_agent(
-    type="browser",
-    task="在京东搜索iPhone，找到价格最低的商品",
-    config={"headless": False, "browser": "chromium"}
-)
-```
-
----
-
----
+这些专项方案在接入时仍需遵守本文的主原则：实现可以独立，但接入路径应优先复用 OpenHarness 主干。
 
 ## 9. 系统级进阶特性（未来扩展）
 
@@ -1993,7 +1300,7 @@ spawn_agent(
 
 **问题**：如何让Agent系统能够自我学习、自我改进，而不只是执行预设任务？
 
-**背景调研**：hermes-agent提出了"learning loop"概念，其核心思想是Agent不仅执行任务，还通过执行反馈持续学习和改进。
+**背景调研**：`EvoMap/evolver` 是一个基于 GEP（Genome Evolution Protocol）的自演进引擎，强调把零散的 prompt 调整沉淀为**可审计、可复用**的演进资产，并记录可追踪的 EvolutionEvent。对本方案最有参考价值的不是它的宿主运行时，而是“演进过程需要可审计、可回滚、可人工复核”的约束。
 
 **Learning Loop的核心概念**（基于meta-learning通用框架）：
 
@@ -2030,7 +1337,7 @@ class BaseAgentLoop:
     async def run(self):
         obs = await self.perception.observe()
         thought = await self.reasoning.think(obs)
-        result = await self.action.execute(thought)
+        result = await self.action.execute(thought.actions)
         return result
 
 # 层次2：任务执行Agent（直接继承）
@@ -2078,19 +1385,19 @@ class MetaLearningAgent(BaseAgentLoop):
    - 需要版本控制和回滚机制
    - 人工确认或自动测试验证
 
-**需要进一步调研**（hermes-agent的具体实现）：
+**可借鉴的方向**（参考 EvoMap/evolver）：
 
-当前搜索未能找到hermes-agent的详细文档，需要进一步调研：
-- hermes-agent的learning loop具体包含哪些阶段？
-- 它是如何收集反馈的？
-- 它是如何安全地修改代码的？
-- 有哪些 safeguards 防止自我修改导致系统崩溃？
+1. **协议化演进**：把“怎么改 prompt / skill / 配置”约束成结构化协议，而不是自由发挥
+2. **演进事件留痕**：每次反思、改进建议、应用结果都形成可审计事件
+3. **离线可运行**：核心自演进能力应当可以本地运行，不依赖外部网络服务
+4. **受保护源文件**：核心主干代码应设置保护边界，避免自演进过程直接覆写关键实现
+5. **人工复核入口**：高风险改动应支持 review 模式，而不是默认自动落地
 
 **与当前框架的关系**：
 
 1. **当前第一阶段**：只实现基础Agent Loop（感知-思考-行动的任务执行）
 2. **第二阶段（可选）**：在基础Loop上增加Learning Loop作为可选组件
-3. **统一性**：保持架构一致性，Learning Loop也是热插拔的PerceptionProvider的一种特殊形式
+3. **统一性**：保持感知-推理-行动抽象的一致性，但为 Learning Loop 额外增加审计、审批、回滚等控制面
 
 **代码位置（未来）**：
 - `extended/meta_learning/` - 元学习相关模块（未来扩展）
@@ -2102,11 +1409,11 @@ class MetaLearningAgent(BaseAgentLoop):
 - Learning Loop与Agent Loop**可以统一**（都是感知-思考-行动）
 - 但属于**不同层次**（执行层 vs 元学习层）
 - 当前先实现基础Loop，Learning Loop作为未来扩展方向
-- 需要进一步调研hermes-agent和其他self-improving agent框架的具体实现
+- 可优先参考 EvoMap/evolver 在协议约束、事件留痕、离线运行和人工复核上的设计思路
 
 ---
 
-**文档版本**：v1.8（2024-04-15）
+**文档版本**：v1.9（2026-04-16）
 **状态**：
-- 8.1-8.7：核心架构决策完成
+- 已完成一次面向“解耦但持续跟上游”的结构性重构
 - 9.1-9.2：系统级进阶特性记录，待后续深入调研和实现

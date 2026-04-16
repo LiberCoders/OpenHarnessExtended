@@ -30,7 +30,7 @@
 |------|------|--------|
 | **异构Agent支持** | 统一的Agent Loop架构，支持CLI/PC UI/Mobile/Browser等不同类型的Agent | P0 |
 | **并行执行能力** | 支持模型在单轮中并行启动多个子Agent，主对话可同时执行本地任务 | P0 |
-| **双向通信机制** | 框架层自动上报 + 模型层主动通信，支持Master查看子Agent状态 | P0 |
+| **双向通信机制** | 系统层自动上报 + 模型层主动通信，支持Master查看子Agent状态 | P0 |
 | **Agent生命周期** | 子Agent的启动、状态监控、消息收发、终止和结果收集 | P0 |
 | **三层热插拔架构** | PerceptionProvider/ReasoningEngine/ActionExecutor抽象，支持感知、推理、行动三层定制 | P0 |
 | **错误上报** | 子Agent可自主重试（1-3次），持续失败后通过通信机制上报 | P1 |
@@ -60,15 +60,15 @@
 
 ### 1.3 当前代码能力评估
 
-#### 1.3.1 已有能力及需要调整的部分
+本节从“哪些地方应复用、哪些地方才值得扩展”的角度评估现有代码，为后续方案设计（第 2 节）和集成策略（第 4 节）提供依据。
 
-本节从“哪些地方应复用、哪些地方才值得扩展”的角度评估现有代码。
+#### 1.3.1 已有能力及需要调整的部分
 
 | 模块 | 已有能力 | 推荐策略 |
 |------|---------|---------|
 | **Agent主循环（`engine/query.py` / `engine/query_engine.py`）** | 已具备稳定的对话循环、工具调用、流式事件与上下文处理能力 | **优先复用**。`extended` 不应复制一套文本 Agent 主循环；只有遇到截图、DOM、设备控制等异构输入/动作时，才在外层增加编排或适配 |
 | **多 Agent 协调（`swarm/`）** | 已有后端启动能力、Mailbox、Team/Teammate 概念 | **在其上扩展**。优先复用后端与生命周期管理；消息能力以适配器方式增强，但保持 Mailbox 为主事实来源 |
-| **后台任务（`tasks/`）** | `BackgroundTaskManager`、任务 ID、stdout/stderr 聚合 | **直接复用** 作为 CLI 类 Agent 的基础设施；异构 Agent 只补自己的输入/输出适配 |
+| **后台任务（`tasks/`）** | `BackgroundTaskManager`、任务 ID、stdout/stderr 聚合 | **直接复用** 作为所有子 Agent 的进程管理基础设施；各类型 Agent 只补自己的感知/行动适配 |
 | **工具系统（`tools/`）** | 已有完善的工具抽象、注册与 MCP 能力 | **沿现有注册体系接入**。新增多 Agent 工具优先做成额外工具或插件，不重写注册主流程 |
 | **插件系统（`plugins/`）** | 已支持插件发现、加载、命令、skills、agents、hooks、MCP | **首选扩展入口**。如果 `extended` 能以插件目录或额外根目录挂载，就不要先改核心入口 |
 | **运行时构建（`ui/runtime.py`）** | `build_runtime(...)` 已支持 `extra_skill_dirs`、`extra_plugin_roots` | **首选集成点**。先利用现有参数挂载扩展能力，再考虑是否需要新增薄封装 |
@@ -182,7 +182,7 @@
 | **Mobile UI Agent** | 手机截图、设备状态 | 视觉+文本推理 | ADB/HDC/Appium | P1 |
 | **Browser Agent** | DOM、页面截图、元素列表 | 结构化/视觉推理 | Playwright API | P1 |
 
-更远期的智能眼镜、IoT、车载、无人机等形态仍与这一抽象兼容，但不应在 P0 文档中占据与近期实现同等篇幅，详见第 9 节。
+更远期的智能眼镜、IoT、车载、无人机等形态仍与这一抽象兼容，具体方向见第 9 节。
 
 #### 维度2：工作机制类型
 
@@ -284,28 +284,21 @@ class MobilePerception(PerceptionProvider):
             metadata={"device_info": self.get_device_info()}
         )
 
-
-class SensorPerception(PerceptionProvider):
-    """IoT/智能手表：读取传感器数据."""
-
-    async def observe(self) -> Observation:
-        sensor_data = await self.read_sensors()
-        return Observation(
-            text=sensor_data.describe(),
-            visual=None,
-            metadata={"sensor_data": sensor_data}
-        )
+# 未来扩展：SensorPerception（IoT）、WearablePerception（可穿戴）等
 
 
 # ========== 可复用的思考和行动层 ==========
 
 class ReasoningEngine(ABC):
     """
-    推理层：热插拔组件，不同Agent类型有不同实现.
+    推理层：可插拔组件.
 
-    定制化点：
-    - System Prompt构建（CLI专家 vs GUI专家 vs Web专家）
-    - 模型选择（GPT-4文本 vs GPT-4V视觉 vs 专用模型）
+    P0 阶段大部分 Agent 应通过 QueryEngineReasoning 复用 OpenHarness 现有推理主干；
+    仅在视觉推理、多模态输入或专用动作空间场景下才需要自定义实现。
+
+    定制化点（按需覆盖）：
+    - System Prompt 构建（CLI专家 vs GUI专家 vs Web专家）
+    - 模型选择（文本模型 vs 视觉模型）
     - 动作空间定义（Shell命令 vs 鼠标键盘 vs Playwright API）
     - 输出格式解析（不同Agent输出不同结构化格式）
     """
@@ -316,10 +309,7 @@ class ReasoningEngine(ABC):
         observation: Observation,
         context: ConversationHistory
     ) -> Thought:
-        """
-        推理决策.
-        包括：构建Prompt -> 调用LLM -> 解析输出为结构化Action
-        """
+        """推理决策：构建Prompt -> 调用LLM -> 解析输出为结构化Action."""
         pass
 
     @abstractmethod
@@ -359,6 +349,121 @@ class ToolBasedActionExecutor(ActionExecutor):
         return ActionResult(results)
 ```
 
+#### 2.2.1 UnifiedAgentLoop 与 QueryEngine 的集成模式
+
+`UnifiedAgentLoop` 是异构 Agent 的**编排抽象**，而 `QueryEngine` 是 OpenHarness 已有的推理主干（含流式调用、工具执行、自动压缩等）。两者的关系是**组合**而非替代：
+
+```
+UnifiedAgentLoop                         QueryEngine (OpenHarness 主干)
+┌──────────────────┐                    ┌──────────────────────────────┐
+│ 1. Perception    │ → 感知数据 →       │                              │
+│    (异构差异层)  │                    │  submit_message / run_query  │
+├──────────────────┤                    │  - 自动压缩                  │
+│ 2. Reasoning     │ ← 内部委托 →      │  - 流式事件                  │
+│    (适配层)      │                    │  - 并发工具调用              │
+├──────────────────┤                    │  - 上下文管理                │
+│ 3. Action        │ ← 工具调用结果 ←  │                              │
+│    (异构差异层)  │                    └──────────────────────────────┘
+└──────────────────┘
+```
+
+**推荐集成模式（P0）**：`ReasoningEngine` 的默认实现委托 `QueryEngine`，把感知数据转换为消息注入 `QueryEngine` 的上下文，再从其输出中提取结构化 Action：
+
+```python
+class QueryEngineReasoning(ReasoningEngine):
+    """P0 默认推理实现：委托 QueryEngine 完成推理和工具调用."""
+
+    def __init__(self, engine: QueryEngine):
+        self._engine = engine
+
+    async def think(self, observation: Observation, context: ConversationHistory) -> Thought:
+        message = self.build_prompt(observation, context)
+        actions = []
+        async for event in self._engine.submit_message(message):
+            if is_tool_call_event(event):
+                actions.append(extract_action(event))
+        return Thought(actions=actions)
+
+    def build_prompt(self, observation: Observation, context: ConversationHistory) -> str:
+        parts = [observation.text]
+        if observation.visual:
+            parts.append(f"[截图已保存至: {observation.visual_path}]")
+        return "\n".join(parts)
+```
+
+**仅在以下场景需要自定义 `ReasoningEngine`**：
+
+- 视觉推理需要直接向模型 API 发送图片（绕过 `QueryEngine` 的纯文本消息流）
+- 动作空间与 OpenHarness 工具体系不兼容（如需要输出像素坐标而非工具调用）
+- 需要专用模型或特殊的输出解析逻辑
+
+这样既保持了三层抽象的扩展能力，又避免为抽象完整性复制一套推理主循环。
+
+#### 2.2.2 上下文管理（ContextManager）
+
+上下文管理分为两个层面：**单 Agent 内的上下文**和 **Agent 间传递的上下文**。
+
+**设计原则**：
+
+1. **复用 OpenHarness 现有机制**：`QueryEngine` 已具备自动压缩（`auto_compact_threshold_tokens`）和上下文窗口管理能力，P0 阶段优先复用，不引入独立的上下文管理系统。
+2. **完整信息持久化到磁盘**：每个 Agent 每轮的完整信息（感知数据、推理过程、执行结果）写入本地磁盘，用于事后审计和调试。
+3. **Agent 间共享的是原始信息的选取**：系统自动从完整轮次记录中选取关键字段（如最近动作、执行状态、错误信息等）供其他 Agent 或 Master 读取，图像和文件只传磁盘路径而非内容本身。这与 Agent 主动发送的消息不同——后者是模型自行生成的摘要或请求，属于模型层通信（见 2.7.2 节）。
+
+```python
+class ContextManager:
+    """Agent 上下文管理."""
+
+    def __init__(self, agent_id: str, persist_dir: Path):
+        self._agent_id = agent_id
+        self._persist_dir = persist_dir
+        self._history: list[TurnRecord] = []
+
+    def update(self, observation: Observation, thought: Thought, result: ActionResult):
+        """记录一轮完整信息并持久化."""
+        record = TurnRecord(
+            turn_id=len(self._history),
+            observation=observation,
+            thought=thought,
+            result=result,
+            timestamp=datetime.now(),
+        )
+        self._history.append(record)
+        self._persist_to_disk(record)
+
+    def get_history(self) -> ConversationHistory:
+        """返回供推理层使用的上下文（受 QueryEngine 压缩机制管理）."""
+        return ConversationHistory(self._history)
+
+    def get_shared_state(self) -> AgentSharedState:
+        """从完整记录中选取关键字段，供其他 Agent 或 Master 读取.
+
+        这是系统自动选取的原始信息子集，不是模型生成的摘要。
+        图像、文件等大体积数据只包含磁盘路径而非内容本身。
+        """
+        latest = self._history[-1] if self._history else None
+        return AgentSharedState(
+            agent_id=self._agent_id,
+            total_turns=len(self._history),
+            last_action=latest.thought.actions if latest else [],
+            last_result=latest.result.output if latest else "",
+            last_error=latest.result.error if latest and latest.result.is_error else None,
+            artifact_paths=self._collect_artifact_paths(),
+        )
+
+    def _persist_to_disk(self, record: TurnRecord):
+        """每轮完整信息写入磁盘，包括截图原始文件等."""
+        path = self._persist_dir / f"turn_{record.turn_id}.json"
+        path.write_text(record.to_json())
+
+    def _collect_artifact_paths(self) -> list[Path]:
+        """收集所有产出物的路径（截图、生成文件等）."""
+        ...
+```
+
+**视觉 Agent 的上下文约束**：
+
+截图数据是视觉 Agent 的主要 token 消耗来源。具体的截图保留策略（保留最近 N 张、关键帧筛选等）属于各类型 Agent 的实现细节，在 `PerceptionProvider` 内部决定哪些截图进入当前轮次的 `Observation`，哪些只保留磁盘路径供回溯。`QueryEngine` 的自动压缩机制为此提供了基础保障。
+
 ### 2.3 异构Agent工厂
 
 ```python
@@ -396,61 +501,52 @@ class HeterogeneousAgentFactory:
             context=InMemoryContext(),
         )
 
-    @staticmethod
-    def create_sensor_agent(device_type: str) -> UnifiedAgentLoop:
-        """IoT/可穿戴设备 Agent: 感知 = 传感器."""
-        return UnifiedAgentLoop(
-            perception=SensorPerception(device_type),
-            reasoning=DataAnalysisReasoning(),
-            action=DeviceControlExecutor(),
-            context=InMemoryContext(),
-        )
+    # 未来扩展：create_sensor_agent、create_wearable_agent 等
 ```
 
 ### 2.4 整体架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Master Agent (主对话)                    │
-│  ┌──────────────────┐  ┌──────────────────┐                │
-│  │ System Prompt    │  │ Progress Monitor │                │
-│  │ (任务分解指导)   │  │    进度监控      │                │
-│  └────────┬─────────┘  └──────────────────┘                │
-│           │ 主对话可同时：                                     │
-│           │ 1. 直接执行CLI (shell_tool)                      │
-│           │ 2. 并行启动子Agent (spawn_agent)                  │
+┌──────────────────────────────────────────────────────────────┐
+│                      Master Agent (主对话)                     │
+│  ┌──────────────────┐  ┌──────────────────┐                  │
+│  │ System Prompt    │  │ Progress Monitor │                  │
+│  │ (任务分解指导)    │  │   进度监控       │                  │
+│  └────────┬─────────┘  └──────────────────┘                  │
+│           │ 主对话可同时：                                      │
+│           │ 1. 直接执行CLI (shell_tool)                        │
+│           │ 2. 并行启动子Agent (spawn_agent)                   │
 └───────────┼──────────────────────────────────────────────────┘
             │
             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Unified Message Bus                      │
-│                  (统一消息总线 - 扩展Mailbox)                  │
-└─────────────┬─────────────────────────────┬───────────────────┘
-              │                             │
-    ┌─────────┴─────────┐       ┌───────────┴────────────┐
-    │                   │       │                        │
-    ▼                   ▼       ▼                        ▼
-┌─────────┐      ┌──────────┐ ┌──────────┐      ┌──────────────┐
-│ CLI Agent│      │ PC UI    │ │ Mobile UI│      │   Sensor     │
-│ (子进程) │      │ Agent    │ │ Agent    │      │   Agent      │
-│         │      │(截图循环) │ │(远程控制)│      │(数据采集)   │
-└────┬────┘      └────┬─────┘ └────┬─────┘      └──────┬───────┘
-     │                │            │                   │
-     │  ┌─────────────┴────────────┴───────────────────┘
-     │  │
-     │  ▼
-     │ ┌───────────────────────────────────────────┐
-     │ │      Unified Agent Loop Core               │
-     │ │  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-     │ │  │Perception│→ │Reasoning│→ │ Action  │     │
-     │ │  │(热插拔)  │  │(可复用) │  │(可复用) │     │
-     │ │  └─────────┘  └─────────┘  └─────────┘     │
-     │ └───────────────────────────────────────────┘
-     │                ↑
-     │                │ 热插拔不同的PerceptionProvider
-     └────────────────┘
-              (CLI/PC/Mobile/Sensor各自实现)
+┌──────────────────────────────────────────────────────────────┐
+│                     Unified Message Bus                       │
+│                  (统一消息总线 - 扩展Mailbox)                   │
+│              增量消息队列，各 Agent 按需消费                     │
+└──────────┬──────────────────┬──────────────────┬─────────────┘
+           │                  │                  │
+           ▼                  ▼                  ▼
+     ┌───────────┐     ┌───────────┐     ┌────────────┐
+     │ CLI Agent  │     │ PC UI     │     │ Mobile UI  │   ...
+     │            │     │ Agent     │     │ Agent      │  (未来扩展)
+     └─────┬─────┘     └─────┬─────┘     └──────┬─────┘
+           │                 │                   │
+           └─────────────────┼───────────────────┘
+                             │
+                             ▼
+           ┌─────────────────────────────────────────┐
+           │       Unified Agent Loop Core            │
+           │  ┌───────────┐ ┌──────────┐ ┌────────┐  │
+           │  │ Perception│→│Reasoning │→│ Action │  │
+           │  │ (热插拔)   │ │(委托QE)  │ │(热插拔)│  │
+           │  └───────────┘ └──────────┘ └────────┘  │
+           │       ↑              ↑            ↑      │
+           │  各Agent类型    QueryEngine    各Agent类型│
+           │  自定义实现     (复用主干)     自定义实现  │
+           └─────────────────────────────────────────┘
 ```
+
+**说明**：所有子 Agent（包括 CLI Agent）都走统一的 Agent Loop。不同类型的差异体现在 Perception 和 Action 的热插拔实现上，Reasoning 层 P0 阶段默认委托 `QueryEngine`。
 
 ### 2.5 System Prompt设计
 
@@ -470,6 +566,7 @@ class HeterogeneousAgentFactory:
    - `type="cli"`：纯命令行操作（编译、脚本、文件操作等）
    - `type="pc_ui"`：需要图形界面交互（点击、输入、截图验证等）
    - `type="mobile_ui"`：需要在手机上执行的操作
+   - `type="browser"`：需要浏览器自动化操作（网页导航、表单填写等）
 
 ## CLI任务执行方式选择
 
@@ -517,71 +614,107 @@ CLI任务有两种执行方式，根据场景自主选择：
 class AgentLifecycleManager:
     """Lightweight manager for sub-agent lifecycle."""
 
-    def __init__(self):
-        self._active_agents: dict[str, UnifiedAgentLoop] = {}
-        self._message_bus: UnifiedMessageBus
+    def __init__(self, message_bus: UnifiedMessageBus):
+        self._active_agents: dict[str, AgentHandle] = {}
+        self._message_bus = message_bus
         self._factory = HeterogeneousAgentFactory()
 
     async def spawn_agent(
         self,
-        agent_type: Literal["cli", "pc_ui", "mobile_ui", "sensor"],
+        agent_type: Literal["cli", "pc_ui", "mobile_ui", "browser"],
         task_description: str,
         context: dict
     ) -> str:
         """Spawn a sub-agent and return agent_id."""
-        # 使用工厂创建对应类型的Agent
-        agent = self._factory.create(agent_type, task_description)
         agent_id = generate_agent_id()
-        self._active_agents[agent_id] = agent
-        # 启动Agent的Loop
-        asyncio.create_task(agent.run_loop())
+        agent = self._factory.create(agent_type, task_description)
+        handle = await self._start_agent(agent_id, agent)
+        self._active_agents[agent_id] = handle
         return agent_id
 
     async def get_agent_status(self, agent_id: str) -> AgentStatus:
         """Query agent execution status."""
 
     async def send_message_to_agent(self, agent_id: str, message: str) -> None:
-        """Send message to a specific agent."""
+        """Send message to a specific agent via message bus."""
 
     async def terminate_agent(self, agent_id: str) -> TaskResult:
         """Terminate agent and return final result."""
 ```
 
+#### 2.6.1 spawn_agent 与现有基础设施的集成路径
+
+`spawn_agent` 的实现应根据 Agent 类型选择不同的底层执行机制，复用 OpenHarness 已有基础设施：
+
+| Agent 类型 | 推荐底层机制 | 说明 |
+|-----------|-------------|------|
+| **所有子 Agent** | `BackgroundTaskManager.create_agent_task()` | 统一复用已有的 agent 子进程管理，天然支持任务 ID、输出捕获、状态查询、停止等能力 |
+
+**选择依据**：
+
+`BackgroundTaskManager` 已经具备任务 ID、stdout/stderr 聚合、状态查询和停止能力，这些能力对所有类型的子 Agent 都适用。CLI Agent 和 UI Agent 的差异在于 Agent 进程内部的感知/行动循环不同，而非进程管理方式不同。`AgentLifecycleManager` 只需做薄封装，把 `TaskRecord` 映射为 `AgentHandle`。
+
+```python
+async def _start_agent(self, agent_id: str, agent_type: str, task: str) -> AgentHandle:
+    """所有子 Agent 统一通过 BackgroundTaskManager 启动."""
+    task_record = await self._task_manager.create_agent_task(
+        prompt=task,
+        description=f"{agent_type} Agent {self._next_id()}",
+        cwd=self._resolve_cwd(agent_type),
+    )
+    return AgentHandle(
+        agent_id=task_record.id,
+        agent_type=agent_type,
+        task_record=task_record,
+    )
+```
+
 ### 2.7 双向通信架构
 
-采用**分层通信机制**：模型主动通信（可选）+ 框架被动上报（硬性机制）
+采用**分层通信机制**：模型主动通信（可选）+ 系统自动上报（硬性机制）。
+
+**核心传输模型**：所有通信都采用**增量消息队列**模式——发送方向队列追加新消息，接收方按需拉取未读消息。不做全量快照推送，也不要求接收方实时处理每一条消息。
 
 #### 2.7.1 分层设计
 
+两层通信承载的**内容类型不同**，不会产生语义重叠：
+
+| 层 | 内容性质 | 典型内容 | 是否进入 Master 上下文 |
+|----|---------|---------|---------------------|
+| **系统层（硬性机制）** | 轻量级状态标志 | `running` / `completed` / `error` / `stalled` 等枚举状态 | 状态正常时**不注入**上下文，仅在异常时才作为系统事件注入 |
+| **模型层（可选）** | 模型生成的富内容 | 错误详情、阶段性成果摘要、请求协助的自然语言消息 | 作为消息注入，由 Master 模型自主决定是否关注 |
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Communication Layers                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Layer 2: Framework-Level Passive Reporting (硬性机制)     │    │
-│  │  - 自动记录所有Agent执行过程                               │    │
-│  │  - 定期向Master Agent上报状态快照                          │    │
-│  │  - 可配置开关和参数（频率/内容/阈值）                        │    │
-│  │  - 不写入普通Agent消息通道，只发给Master                    │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                              ↓                                    │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Layer 1: Model-Level Active Communication (模型主动)    │    │
-│  │  - Agent模型主动调用工具查看其他Agent状态                  │    │
-│  │  - Agent模型主动发送消息给其他Agent                       │    │
-│  │  - 完全可选，Agent可以选择不看不发                       │    │
-│  │  - 对普通Agent无强制要求，主Agent例外（必须关注全局）       │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                              ↓                                    │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Layer 0: Unified Message Bus (基础设施)                   │    │
-│  │  - 基于Mailbox的统一消息通道                              │    │
-│  │  - 支持点对点和广播                                        │    │
-│  │  - 所有通信的底层支撑                                      │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                   │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     Communication Layers                      │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌────────────────────────────────────────────────────┐      │
+│  │  Layer 2: System-Level Auto Reporting         │      │
+│  │  硬性机制，轻量状态标志                               │      │
+│  │  - 自动记录 Agent 执行过程                           │      │
+│  │  - 增量追加状态事件到消息队列                         │      │
+│  │  - 状态正常时不占用 Master 上下文窗口                 │      │
+│  │  - 仅异常事件（error/stall）触发注入                  │      │
+│  └────────────────────────────────────────────────────┘      │
+│                              ↓                                │
+│  ┌────────────────────────────────────────────────────┐      │
+│  │  Layer 1: Model-Level Active Communication         │      │
+│  │  可选，模型生成的富内容                               │      │
+│  │  - Agent 模型主动调用工具查看其他 Agent 状态          │      │
+│  │  - Agent 模型主动发送消息给其他 Agent                │      │
+│  │  - 完全可选，Agent 可以选择不看不发                  │      │
+│  │  - 主 Agent 应关注全局，普通 Agent 无强制要求        │      │
+│  └────────────────────────────────────────────────────┘      │
+│                              ↓                                │
+│  ┌────────────────────────────────────────────────────┐      │
+│  │  Layer 0: Unified Message Bus (基础设施)             │      │
+│  │  - 基于 Mailbox 的增量消息队列                       │      │
+│  │  - 支持点对点和广播                                  │      │
+│  │  - 所有通信的底层支撑                                │      │
+│  └────────────────────────────────────────────────────┘      │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 #### 2.7.2 模型层通信（可选）
@@ -655,124 +788,97 @@ class ReportErrorTool(BaseTool):
 
 **关键原则**：子Agent有有限的自主重试权（避免频繁上报），但最终必须上报，不由子Agent无限重试或擅自决定任务失败。
 
-#### 2.7.3 框架层通信（硬性机制）
+#### 2.7.3 系统层通信（硬性机制）
 
-**框架自动记录和上报**（无需模型干预）：
+系统层上报的核心定位是**轻量级状态标志**，类似心跳和事件通知，而非详细的执行日志。
+
+**设计要点**：
+
+1. **增量追加**：每次上报都是向消息队列追加一条新的状态事件，Master 按需拉取未读事件。
+2. **内容极简**：正常状态下只是一个枚举值（`running` / `completed` / `error` / `stalled`），只有异常时才附带简要描述。
+3. **按需注入上下文**：状态正常（`running`）时，Master 不需要将其注入 LLM 上下文窗口；仅在状态变更（`completed` / `error` / `stalled`）时才注入，避免无谓消耗 token 预算。
 
 ```python
-class FrameworkReportingManager:
-    """Framework-level passive reporting mechanism.
-    
-    This runs independently of the agent model's decisions.
-    """
-    
-    def __init__(self):
-        self.reporting_config: ReportingConfig
-        self.execution_log: ExecutionLogStore
-    
+class SystemReportingManager:
+    """System-level auto reporting: lightweight status events."""
+
     async def on_agent_turn_complete(self, agent_id: str, turn_result: TurnResult):
         """Hook: called after each agent turn."""
-        # 1. 记录到执行日志（本地存储）
         await self.execution_log.append(agent_id, turn_result)
-        
-        # 2. 检查是否需要上报给Master（基于配置）
-        if self.should_report_to_master(agent_id):
-            report = self.generate_report(agent_id)
-            # 通过Mailbox适配层发给Master视图，而不是维护独立消息真相
-            await self.mailbox_adapter.emit_report_to_master(
-                type="framework_report",
-                agent_id=agent_id,
-                data=report,
-                importance=self.calculate_importance(report)
-            )
-    
-    def should_report_to_master(self, agent_id: str) -> bool:
-        """Check if should report based on config."""
-        config = self.reporting_config
-        
-        # 条件1：固定时间间隔
-        if time_since_last_report(agent_id) >= config.interval_seconds:
-            return True
-        
-        # 条件2：重要事件（完成/错误/异常长时间）
-        if has_important_event(agent_id):
-            return True
-        
-        # 条件3：Agent长时间无响应
-        if is_agent_idle_too_long(agent_id, config.idle_threshold):
-            return True
-        
-        return False
+
+        event = self._build_status_event(agent_id, turn_result)
+        # 增量追加到消息队列，不维护独立消息真相
+        await self.mailbox_adapter.append_event(
+            recipient="master",
+            event=event,
+        )
+
+    def _build_status_event(self, agent_id: str, turn_result: TurnResult) -> StatusEvent:
+        """构建轻量状态事件."""
+        status = self._determine_status(turn_result)  # running / completed / error / stalled
+        return StatusEvent(
+            agent_id=agent_id,
+            status=status,
+            turn_count=self._get_turn_count(agent_id),
+            elapsed_seconds=self._get_elapsed(agent_id),
+            detail=turn_result.error_summary if status == "error" else None,
+        )
+
+
+@dataclass
+class StatusEvent:
+    """系统层上报的最小信息单元."""
+    agent_id: str
+    status: Literal["running", "completed", "error", "stalled"]
+    turn_count: int
+    elapsed_seconds: float
+    detail: str | None = None  # 仅异常时填充
 ```
+
+**上下文窗口管理策略**：
+
+系统层上报的频率、内容量和处理方式共同决定了对 Master 上下文窗口的压力。以下策略确保低开销：
+
+| 策略 | 说明 |
+|------|------|
+| **正常状态不注入** | `status=running` 的事件仅更新内存中的状态表，不作为消息注入 Master 的 LLM 上下文 |
+| **仅异常触发注入** | `error` / `stalled` / `completed` 才生成系统消息插入 Master 对话流 |
+| **低频上报** | 默认上报频率较低（如每轮结束时或固定间隔），不做高频轮询 |
+| **合并同源事件** | 同一 Agent 连续多条 `running` 事件在展示时合并为最新一条 |
 
 **配置示例**：
 
 ```yaml
-# config/reporting.yaml
-framework_reporting:
-  enabled: true  # 总开关
-  
-  # 定期上报配置
-  interval_reporting:
-    enabled: true
-    interval_seconds: 30  # 每30秒上报一次
-    content_level: "summary"  # "minimal" | "summary" | "detailed" | "full"
-  
-  # 事件触发的上报
-  event_reporting:
-    enabled: true
-    on_completion: true  # 任务完成时上报
-    on_error: true       # 出错时上报
-    on_stall: true       # 卡顿时上报
-  
-  # 上报内容配置
-  report_content:
-    include_steps_count: true
-    include_last_action: true
-    include_last_output: true
-    include_progress_percentage: true
-    include_execution_time: true
-    include_screenshot_thumbnail: false  # 可选，减小数据量
-  
-  # Master Agent特殊处理
-  master_agent:
-    soft_reminder: true  # 将框架报告作为软提醒插入消息流
-    reminder_format: "[System] Agent {id} update: {summary}"
-    allow_ignore: true   # Master可以选择忽略不处理
+system_reporting:
+  enabled: true
+  interval_seconds: 30       # 最短上报间隔
+  inject_to_context:
+    on_error: true            # 出错时注入 Master 上下文
+    on_completion: true       # 完成时注入
+    on_stall: true            # 卡顿时注入
+    on_running: false         # 正常运行时不注入
+  event_format: "[System] Agent {id}: {status}"  # 注入时的格式
 ```
 
-**框架报告示例**（插入到主Agent消息流）：
+**系统上报示例**（仅异常事件注入主 Agent 消息流）：
 
 ```markdown
 [用户消息]: 帮我同时在电脑和手机上下载安装最新版本
 
-[模型思考]: 这是一个可以并行的任务...
-
-[工具调用]: spawn_agent(type="pc_ui", task="电脑下载安装") 
+[工具调用]: spawn_agent(type="pc_ui", task="电脑下载安装")
             spawn_agent(type="mobile_ui", task="手机下载安装")
 
-[等待...]
+... (pc_ui_001 状态 running，不注入上下文) ...
 
-[System Event - Framework Report]: 
-Agent "pc_ui_001" update: 
-- Status: running
-- Steps completed: 5
-- Last action: 点击下载按钮
-- Last output: "下载进度 45%"
-- Running for: 45 seconds
-- Progress: 45%
+[System Event]: Agent "mobile_ui_002": error - 网络连接失败 (turn 2, 30s)
 
-[模型思考]: 看起来正常，继续等待...
+[模型思考]: 手机端出错了，电脑端还在运行，我需要处理手机端的问题...
 
-[System Event - Framework Report]:
-Agent "mobile_ui_002" update:
-- Status: error
-- Steps completed: 2
-- Last action: 点击App Store
-- Error: "网络连接失败"
-- Running for: 30 seconds
+... (pc_ui_001 完成) ...
 
-[模型思考]: 手机端出错了，我需要询问用户是否重试还是跳过...
+[System Event]: Agent "pc_ui_001": completed (turn 8, 120s)
+
+[模型思考]: 电脑端已完成，现在处理手机端...
 ```
 
 #### 2.7.4 统一消息总线基础设施
@@ -800,9 +906,9 @@ class UnifiedMessageBus:
 class Message:
     message_id: str
     timestamp: datetime
-    sender: str           # agent_id or "framework" or "master"
+    sender: str           # agent_id or "system" or "master"
     recipient: str        # agent_id or "broadcast"
-    layer: Literal["model", "framework"]  # 标识是哪一层产生的消息
+    layer: Literal["model", "system"]  # 标识是哪一层产生的消息
     type: MessageType
     payload: dict
 ```
@@ -813,9 +919,9 @@ class Message:
 |------|-----|------|------|
 | agent_status_query | model | Any→Any | Agent主动查询其他Agent |
 | agent_message | model | Any→Any | Agent主动发送消息 |
-| framework_status_report | framework | Framework→Master | 框架定期上报 |
-| framework_completion_report | framework | Framework→Master | 框架任务完成上报 |
-| framework_error_report | framework | Framework→Master | 框架错误上报 |
+| system_status_report | system | System→Master | 系统定期上报 |
+| system_completion_report | system | System→Master | 系统任务完成上报 |
+| system_error_report | system | System→Master | 系统错误上报 |
 | user_message | - | User→Master | 用户输入 |
 | control_command | model | Master→Any | 主Agent控制指令 |
 
@@ -832,12 +938,12 @@ class SpawnAgentTool(BaseTool):
     1. Execute a CLI task independently
     2. Perform UI operations on PC (with screenshot loop)
     3. Control mobile device remotely
-    4. Interact with IoT/sensor devices
+    4. Automate browser interactions
 
     For parallel tasks, call this tool multiple times in the same turn.
     """
 
-    agent_type: Literal["cli", "pc_ui", "mobile_ui", "sensor"] = Field(
+    agent_type: Literal["cli", "pc_ui", "mobile_ui", "browser"] = Field(
         description="Type of agent to spawn"
     )
     task: str = Field(description="Task description for the agent")
@@ -966,9 +1072,87 @@ class SendMessageToAgentTool(BaseTool):
 - 感知：命令输出捕获、文件系统状态
 - 行动：subprocess执行
 
-**Sensor Agent**（未来扩展）：
-- 感知：设备API / MQTT / 蓝牙
-- 行动：控制指令下发
+### 3.4 并发模型与资源互斥
+
+**决策**：子 Agent 使用独立子进程执行；主进程既负责编排和通信，也能直接执行任务（如通过 `shell_tool` 执行 CLI 命令）。
+
+**理由**：
+- 子进程天然隔离，一个 Agent 的阻塞操作不会影响其他 Agent 或主对话
+- 与 OpenHarness 现有的 `BackgroundTaskManager`（子进程模型）和 `SubprocessBackend` 保持一致
+- 同进程 `asyncio.create_task` 模式在遇到同步阻塞调用（如截图、设备通信）时会阻塞整个事件循环
+
+**主进程的双重角色**：主进程（即主对话/Master Agent）不仅负责编排子 Agent，自身也是一个完整的 Agent，可以直接通过工具执行任务。典型模式是：主对话用 `shell_tool` 直接执行一个快速 CLI 任务，同时通过 `spawn_agent` 把耗时任务交给子 Agent 并行处理。主对话不应退化为纯粹的监控角色——如果有两个并行 CLI 任务，主对话自己做一个、再 spawn 一个，比 spawn 两个然后空等更高效。
+
+**资源互斥约束**：
+
+| 资源 | 约束 | 处理方式 |
+|------|------|---------|
+| 屏幕控制权 | 同一时刻只能有一个 PC UI Agent 操控同一块屏幕 | 由 `AgentLifecycleManager` 在 spawn 时检查，拒绝重复分配 |
+| 设备连接 | 一台 Mobile 设备同一时刻只能被一个 Agent 控制 | 设备 ID 作为资源锁，spawn 时检查占用状态 |
+| 浏览器实例 | 不同 Browser Agent 可使用不同的 browser context 并行 | Playwright 原生支持多 context 隔离 |
+| CLI 环境 | 多个 CLI Agent 可以并行，但需注意工作目录和文件系统冲突 | 每个 Agent 使用独立工作目录 |
+
+### 3.5 子 Agent 工具注册
+
+**决策**：每种类型的子 Agent 使用独立组装的 `ToolRegistry`，而非共享主 Agent 的全局工具集。
+
+**理由**：
+- 不同 Agent 类型需要不同的工具（CLI Agent 需要 shell 工具，PC UI Agent 需要鼠标键盘工具）
+- 子 Agent 不应拥有 `spawn_agent` 等编排工具（避免子 Agent 无限嵌套派生）
+- 独立工具集也便于控制子 Agent 的能力边界
+
+**实现方式**：在 `HeterogeneousAgentFactory` 中为每种 Agent 类型组装专用的工具集：
+
+```python
+def _build_tool_registry(self, agent_type: str) -> ToolRegistry:
+    """为子 Agent 组装专用工具集."""
+    registry = ToolRegistry()
+
+    # 通用通信工具（所有子 Agent 共享）
+    registry.register(ReportErrorTool())
+    registry.register(SendMessageToAgentTool())
+
+    if agent_type == "cli":
+        registry.register(ShellTool())
+        registry.register(FileReadTool())
+        registry.register(FileWriteTool())
+    elif agent_type == "pc_ui":
+        registry.register(ScreenshotTool())
+        registry.register(MouseClickTool())
+        registry.register(KeyboardInputTool())
+    elif agent_type == "mobile_ui":
+        registry.register(AdbScreencapTool())
+        registry.register(AdbInputTool())
+    elif agent_type == "browser":
+        registry.register(PlaywrightNavigateTool())
+        registry.register(PlaywrightClickTool())
+        registry.register(PlaywrightTypeTool())
+
+    return registry
+```
+
+### 3.6 子 Agent Token 预算控制
+
+**决策**：每个子 Agent 在创建时配置 `max_turns` 上限，防止失控的循环消耗过量 API 费用。
+
+**机制**：
+
+- `QueryEngine` 已内置 `max_turns` 参数，子 Agent 复用此能力即可。
+- 默认值根据 Agent 类型不同而不同（CLI 任务通常轮次较少，UI 任务可能需要更多轮次）。
+- 超过 `max_turns` 后触发 `MaxTurnsExceeded`，由系统层捕获并上报给 Master。
+
+| Agent 类型 | 建议默认 max_turns | 说明 |
+|-----------|-------------------|------|
+| CLI Agent | 8-16 | 命令执行通常较快收敛 |
+| PC UI Agent | 20-30 | 截图→推理→操作循环轮次较多 |
+| Mobile Agent | 20-30 | 同上 |
+| Browser Agent | 15-25 | 结构化操作效率高于纯视觉 |
+
+Master Agent 在调用 `spawn_agent` 时可以通过参数覆盖默认值：
+
+```python
+spawn_agent(type="cli", task="编译项目", max_turns=20)  # 复杂编译可能需要更多轮次
+```
 
 ## 4. 与现有代码的集成点（解耦设计）
 
@@ -1075,28 +1259,30 @@ async def build_extended_runtime(project_root: Path):
 - 每一阶段都必须给出**验收标准**和**失败时的降级方案**。
 - 阶段推进顺序以“先打通扩展边界，再增加异构表面” 为准，而不是先铺满所有 Agent 类型。
 
-### 5.1 阶段一：打通扩展挂载路径 + CLI 最小闭环（P0）
+### 5.1 阶段一：打通扩展挂载路径 + 多 Agent 编排最小闭环（P0）
 
-**目标**：在不改或极少改核心入口的前提下，让 `extended` 可以通过额外 plugin root / skill dir 被加载，并跑通最小 CLI Agent 闭环。
+**目标**：在不改或极少改核心入口的前提下，让 `extended` 可以通过额外 plugin root / skill dir 被加载，并跑通"主对话 + 子 Agent 并行协作"的最小闭环。
+
+**说明**：主对话本身已经具备 CLI 执行能力（通过 `shell_tool`），这里所说的"CLI Agent"是指**作为子 Agent 独立运行**的 CLI 任务——它在独立进程中执行，有自己的上下文和生命周期，主对话可以在等待它完成的同时继续做其他事。选择 CLI 类型作为第一个子 Agent 实现，是因为它的感知/行动层最简单（命令输出 + subprocess），可以最快验证多 Agent 编排链路。
 
 **工作项**：
 
 1. 建立 `extended/` 基础结构：
-   - `extended/agents/base.py`
-   - `extended/agents/cli/`
-   - `extended/tools/`
+   - `extended/agents/base.py`（UnifiedAgentLoop 基础抽象）
+   - `extended/agents/cli/`（CLI 子 Agent 的感知/行动实现）
+   - `extended/tools/`（`spawn_agent`、`query_agent_status` 等编排工具）
    - `extended/skills/` 或插件目录
 2. 使用 `build_runtime(..., extra_plugin_roots, extra_skill_dirs)` 挂载扩展目录。
-3. 先实现 CLI Agent 的最小能力：
-   - 复用 `tasks/manager.py`
-   - 复用现有推理主干
+3. 实现 CLI 子 Agent 的最小能力：
+   - 复用 `BackgroundTaskManager` 进行子进程管理
+   - 复用现有推理主干（`QueryEngineReasoning`）
    - 仅把 CLI 特有的感知/动作差异放到 `extended`
 4. 补齐 prompt/skill 中关于任务拆解与并行执行的指导。
 
 **验收标准**：
 
 - 不修改核心 CLI 的情况下，可以通过项目侧入口或运行时构建参数加载 `extended`
-- 可以启动至少一个 CLI 类扩展 Agent，并完成一次任务执行
+- 主对话可以通过 `spawn_agent(type="cli", ...)` 启动一个后台子 Agent，同时自己继续执行其他任务
 - 关闭 `extended` 时，原生 OpenHarness 行为不受影响
 
 **失败时的降级方案**：
@@ -1123,7 +1309,7 @@ async def build_extended_runtime(project_root: Path):
 
 **验收标准**：
 
-- 主 Agent 能查询子 Agent 状态并收取框架层上报
+- 主 Agent 能查询子 Agent 状态并收取系统层上报
 - 至少支持 2 个并行任务同时运行
 - 消息层不存在 Mailbox 之外的第二套权威持久状态
 
@@ -1220,7 +1406,7 @@ async def build_extended_runtime(project_root: Path):
 
 ## 8. 讨论记录
 
-本节不再保留冗长的原始讨论过程，只保留会影响实现边界的决策索引。
+本节只保留会影响实现边界的决策索引。
 
 ### 8.1 是否需要显式 TaskPlanner
 
@@ -1242,26 +1428,27 @@ async def build_extended_runtime(project_root: Path):
 - 耗时、可并行、可独立监控的任务，优先交给子 Agent
 - 主对话与子 Agent 可以并行工作，避免主线程空转等待
 
-### 8.3 统一 Loop 与三层热插拔的最终解释
+### 8.3 统一 Loop 与三层热插拔的定位
 
 **结论**：三层热插拔是长期抽象；P0 优先扩展感知层和行动层，推理层尽量复用主干。
 
 **约束**：
 
-- 不再把“统一 Loop”理解为必须复制一套 `query.py`
+- “统一 Loop”是统一的**编排抽象**，不是复制一套 `query.py`（详见 2.2.1 节集成模式说明）
 - 新增 Agent 类型实现差异层即可，不追求为抽象完整性重写主干
-- `UnifiedAgentLoop` 若保留，应主要承担异构编排职责
+- `UnifiedAgentLoop` 主要承担异构编排职责，推理决策通过 `QueryEngineReasoning` 委托给现有主干
 
 ### 8.4 双向通信机制设计
 
-**结论**：采用分层通信，但保持 Mailbox 为唯一权威消息来源。
+**结论**：采用增量消息队列 + 分层通信，保持 Mailbox 为唯一权威消息来源。
 
 **规则**：
 
-- 模型层通信是可选工具能力
-- 框架层上报是硬机制，但应建立在 Mailbox/Swarm 契约之上
+- 所有通信采用增量消息追加模式，接收方按需拉取
+- 系统层上报是轻量状态标志（`running` / `error` 等），正常时不占用上下文窗口
+- 模型层通信是可选的富内容通信（错误详情、阶段性成果等），由模型自主决策是否使用
+- 两层内容类型不同，不存在语义重叠和去重问题
 - 不新增另一套独立持久消息队列
-- Master 收到的是聚合视图或派生事件，而不是第二套真相存储
 
 ### 8.5 设备侧技术路线决策
 
@@ -1282,7 +1469,7 @@ async def build_extended_runtime(project_root: Path):
 **问题**：当主Agent决策失败、子Agent大面积失败、或系统进入不可恢复状态时，如何处理？
 
 **讨论要点**：
-- 第8.7节的错误处理只覆盖子Agent→主Agent的单层上报
+- 2.7.2 节的错误处理只覆盖子Agent→主Agent的单层上报，如果主Agent自身决策失败或子Agent大面积失败，则缺少系统级的应对机制
 - 需要系统级的故障检测、自动恢复、降级策略
 - 可能涉及：心跳检测、故障转移、状态快照与回滚
 
@@ -1298,122 +1485,33 @@ async def build_extended_runtime(project_root: Path):
 
 ### 9.2 系统自演进：Learning Loop（元学习）
 
-**问题**：如何让Agent系统能够自我学习、自我改进，而不只是执行预设任务？
+**问题**：如何让 Agent 系统能够自我学习、自我改进，而不只是执行预设任务？
 
-**背景调研**：`EvoMap/evolver` 是一个基于 GEP（Genome Evolution Protocol）的自演进引擎，强调把零散的 prompt 调整沉淀为**可审计、可复用**的演进资产，并记录可追踪的 EvolutionEvent。对本方案最有参考价值的不是它的宿主运行时，而是“演进过程需要可审计、可回滚、可人工复核”的约束。
+**核心思路**：Learning Loop 可以统一为 Agent Loop 的一种特殊形式——感知层读取执行历史和用户反馈，推理层分析成功/失败模式并生成改进建议，行动层修改代码、skill 或配置。它与任务执行 Agent 共享同一套三层抽象，但运行在不同层次（元学习层 vs 执行层）。
 
-**Learning Loop的核心概念**（基于meta-learning通用框架）：
+**关键设计约束**（参考 [EvoMap/evolver](https://github.com/EvoMap/evolver) 的演进协议思路）：
 
-```
-普通Agent Loop（执行层）:
-感知(任务输入) → 思考(如何完成) → 行动(执行) → 输出(结果)
-        ↑                                    │
-        └──────────── 单次任务 ──────────────┘
+1. **可审计**：每次反思和改进建议都形成结构化的演进事件，支持追溯
+2. **可回滚**：所有系统修改都经过版本控制，支持回退到任意历史状态
+3. **人工复核**：高风险改动（如修改核心代码）应支持 review 模式，而非默认自动落地
+4. **受保护边界**：核心主干代码设置保护区，自演进过程不直接覆写关键实现
+5. **离线可运行**：核心能力不依赖外部网络服务
 
-Learning Loop（元学习层）:
-感知(执行历史+反馈) → 思考(哪些做得好/不好) → 行动(改进策略/技能/代码)
-        ↑                                          │
-        └──────────── 持续演进 ────────────────────┘
-```
+**实现方向**（待后续深入调研）：
 
-**Learning Loop与传统Agent Loop的对比**：
+- 反思机制：任务完成后自动分析执行轨迹
+- 经验记忆：长期存储成功/失败案例，支持相似性检索
+- 技能改进：基于使用效果优化 skill 实现
+- 代码自修改：在沙箱环境中修改自身代码（最激进，需最严格的审计控制）
 
-| 维度 | Agent Loop（执行层） | Learning Loop（元学习层） |
-|------|---------------------|-------------------------|
-| 目标 | 完成具体任务 | 改进完成任务的策略 |
-| 感知 | 当前任务上下文 | 历史执行数据+反馈 |
-| 思考 | 如何完成当前任务 | 哪些策略有效，如何改进 |
-| 行动 | 执行任务操作 | 修改代码/配置/skill |
-| 频率 | 每轮对话执行 | 周期性或触发式执行 |
-| 输出 | 任务结果 | 系统改进（代码/知识） |
+**代码位置（未来）**：`extended/meta_learning/`
 
-**Learning Loop与统一Agent Loop的关系**：
-
-**观点**：Learning Loop**可以**统一为Agent Loop的一种特殊形式，但需要明确层次：
-
-```python
-# 层次1：基础Agent Loop（所有Agent共享）
-class BaseAgentLoop:
-    async def run(self):
-        obs = await self.perception.observe()
-        thought = await self.reasoning.think(obs)
-        result = await self.action.execute(thought.actions)
-        return result
-
-# 层次2：任务执行Agent（直接继承）
-class TaskAgent(BaseAgentLoop):
-    """普通任务执行Agent"""
-    perception = TaskPerceptionProvider()
-    reasoning = StandardReasoning()
-    action = TaskActionExecutor()
-
-# 层次3：元学习Agent（也是Agent Loop，但感知/思考/行动不同）
-class MetaLearningAgent(BaseAgentLoop):
-    """
-    Learning Loop - 元学习Agent
-    它也是Agent Loop，但：
-    - 感知 = 收集执行历史、用户反馈、错误日志
-    - 思考 = 分析成功/失败模式，生成改进建议
-    - 行动 = 修改代码、更新skill、调整配置
-    """
-    perception = ExecutionHistoryPerception()  # 读取执行日志
-    reasoning = ImprovementAnalysisReasoning()  # 分析如何改进
-    action = SystemModificationExecutor()  # 修改系统本身
-```
-
-**Learning Loop的具体实现方向**（待调研完善）：
-
-基于通用的meta-learning框架，可能的组件包括：
-
-1. **反思（Reflection）**
-   - 在任务完成后，分析执行轨迹
-   - 识别哪些步骤做得好，哪些可以优化
-   - 生成反思报告
-
-2. **记忆（Memory）**
-   - 长期存储成功案例和失败案例
-   - 支持基于相似性的检索
-   - 形成"经验库"
-
-3. **技能改进（Skill Improvement）**
-   - 基于使用频率和效果，优化skill实现
-   - 自动合并相似的skill
-   - 淘汰不常用的skill
-
-4. **代码自我修改（Self-Modification）**
-   - 在安全的沙箱环境中，Agent可以修改自己的代码
-   - 需要版本控制和回滚机制
-   - 人工确认或自动测试验证
-
-**可借鉴的方向**（参考 EvoMap/evolver）：
-
-1. **协议化演进**：把“怎么改 prompt / skill / 配置”约束成结构化协议，而不是自由发挥
-2. **演进事件留痕**：每次反思、改进建议、应用结果都形成可审计事件
-3. **离线可运行**：核心自演进能力应当可以本地运行，不依赖外部网络服务
-4. **受保护源文件**：核心主干代码应设置保护边界，避免自演进过程直接覆写关键实现
-5. **人工复核入口**：高风险改动应支持 review 模式，而不是默认自动落地
-
-**与当前框架的关系**：
-
-1. **当前第一阶段**：只实现基础Agent Loop（感知-思考-行动的任务执行）
-2. **第二阶段（可选）**：在基础Loop上增加Learning Loop作为可选组件
-3. **统一性**：保持感知-推理-行动抽象的一致性，但为 Learning Loop 额外增加审计、审批、回滚等控制面
-
-**代码位置（未来）**：
-- `extended/meta_learning/` - 元学习相关模块（未来扩展）
-- `extended/meta_learning/reflection.py` - 反思机制
-- `extended/meta_learning/skill_optimization.py` - 技能改进
-- `extended/meta_learning/self_modification.py` - 代码自修改（最激进）
-
-**结论**：
-- Learning Loop与Agent Loop**可以统一**（都是感知-思考-行动）
-- 但属于**不同层次**（执行层 vs 元学习层）
-- 当前先实现基础Loop，Learning Loop作为未来扩展方向
-- 可优先参考 EvoMap/evolver 在协议约束、事件留痕、离线运行和人工复核上的设计思路
+**结论**：当前先实现基础 Agent Loop，Learning Loop 作为第二阶段或更后期的可选扩展。详细设计待独立文档。
 
 ---
 
-**文档版本**：v1.9（2026-04-16）
+**文档版本**：v2.0（2026-04-16）
 **状态**：
-- 已完成一次面向“解耦但持续跟上游”的结构性重构
+- 已完成面向"解耦但持续跟上游"的结构性设计
+- 补充了 UnifiedAgentLoop 与 QueryEngine 的集成模式、上下文管理、增量通信模型、并发约束与 Token 预算等关键设计
 - 9.1-9.2：系统级进阶特性记录，待后续深入调研和实现

@@ -120,6 +120,7 @@ class ProviderProfile(BaseModel):
     allowed_models: list[str] = Field(default_factory=list)
     context_window_tokens: int | None = None
     auto_compact_threshold_tokens: int | None = None
+    tls_verify: bool = True
 
     @property
     def resolved_model(self) -> str:
@@ -445,6 +446,7 @@ class Settings(BaseModel):
     model: str = "claude-sonnet-4-6"
     max_tokens: int = 16384
     base_url: str | None = None
+    tls_verify: bool = True
     timeout: float = 30.0
     context_window_tokens: int | None = None
     auto_compact_threshold_tokens: int | None = None
@@ -509,6 +511,7 @@ class Settings(BaseModel):
                 "provider": profile.provider,
                 "api_format": profile.api_format,
                 "base_url": profile.base_url,
+                "tls_verify": profile.tls_verify,
                 "context_window_tokens": profile.context_window_tokens,
                 "auto_compact_threshold_tokens": profile.auto_compact_threshold_tokens,
                 "model": resolve_model_setting(
@@ -566,6 +569,7 @@ class Settings(BaseModel):
                 "last_model": next_model,
                 "context_window_tokens": next_context_window_tokens,
                 "auto_compact_threshold_tokens": next_auto_compact_threshold_tokens,
+                "tls_verify": self.tls_verify,
             }
         )
         profiles = self.merged_profiles()
@@ -742,6 +746,7 @@ class Settings(BaseModel):
             "profiles",
             "context_window_tokens",
             "auto_compact_threshold_tokens",
+            "tls_verify",
         }
         profile_updates = profile_keys.intersection(updates)
         if not profile_updates:
@@ -756,8 +761,12 @@ def _apply_env_overrides(settings: Settings) -> Settings:
 
     Provider-scoped env vars (``ANTHROPIC_BASE_URL``, ``ANTHROPIC_MODEL``,
     ``OPENAI_BASE_URL``) only apply when the active profile does *not*
-    explicitly configure the corresponding field.  ``OPENHARNESS_*`` env vars
+    explicitly configure the corresponding field.      ``OPENHARNESS_*`` env vars
     always override (explicit user intent).
+
+    ``OPENHARNESS_TLS_VERIFY`` (``0``/``false``/``off`` to disable) overrides TLS
+    certificate verification for the resolved HTTP client (useful for local
+    HTTPS with self-signed certificates).
     """
     updates: dict[str, Any] = {}
 
@@ -792,6 +801,10 @@ def _apply_env_overrides(settings: Settings) -> Settings:
     timeout = os.environ.get("OPENHARNESS_TIMEOUT")
     if timeout:
         updates["timeout"] = float(timeout)
+
+    tls_verify = os.environ.get("OPENHARNESS_TLS_VERIFY")
+    if tls_verify is not None:
+        updates["tls_verify"] = _parse_bool_env(tls_verify)
 
     max_turns = os.environ.get("OPENHARNESS_MAX_TURNS")
     if max_turns:

@@ -8,6 +8,7 @@ import logging
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from openai import AsyncOpenAI
 
 from openharness.api.client import (
@@ -231,13 +232,23 @@ class OpenAICompatibleClient:
     so it can be used as a drop-in replacement in the agent loop.
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None, timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        tls_verify: bool = True,
+    ) -> None:
         kwargs: dict[str, Any] = {"api_key": api_key}
         normalized_base_url = _normalize_openai_base_url(base_url)
         if normalized_base_url:
             kwargs["base_url"] = normalized_base_url
         if timeout is not None:
             kwargs["timeout"] = timeout
+        if not tls_verify:
+            eff_timeout = float(timeout) if timeout is not None else 30.0
+            kwargs["http_client"] = httpx.AsyncClient(verify=False, timeout=eff_timeout)
         self._client = AsyncOpenAI(**kwargs)
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:

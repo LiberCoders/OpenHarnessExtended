@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 import httpx
 
@@ -312,6 +313,29 @@ def test_openai_client_init_passes_timeout(monkeypatch):
 
     assert captured["timeout"] == 45.0
 
+
+def test_openai_client_init_tls_verify_false_adds_http_client(monkeypatch):
+    openai_kwargs: dict[str, object] = {}
+    httpx_client_kwargs: dict[str, object] = {}
+
+    class _StubAsyncOpenAI:
+        def __init__(self, **kwargs):
+            openai_kwargs.update(kwargs)
+
+    mock_http_client = MagicMock(spec=httpx.AsyncClient)
+
+    def _fake_httpx_async_client(**kwargs):
+        httpx_client_kwargs.update(kwargs)
+        return mock_http_client
+
+    monkeypatch.setattr("openharness.api.openai_client.AsyncOpenAI", _StubAsyncOpenAI)
+    monkeypatch.setattr("openharness.api.openai_client.httpx.AsyncClient", _fake_httpx_async_client)
+    OpenAICompatibleClient(api_key="test-key", tls_verify=False, timeout=22.0)
+
+    assert httpx_client_kwargs["verify"] is False
+    assert httpx_client_kwargs["timeout"] == 22.0
+    assert openai_kwargs["http_client"] is mock_http_client
+    assert openai_kwargs.get("timeout") == 22.0
 
 
 class TestStreamMessageTokenParams:

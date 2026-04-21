@@ -41,6 +41,17 @@ def _sanitize_metadata(value: Any) -> Any:
     return str(value)
 
 
+def _fallback_session_id_from_path(path: Path) -> str:
+    stem = path.stem
+    if not stem.startswith("session-"):
+        return stem
+    raw = stem[len("session-") :]
+    parts = raw.split("-", 1)
+    if len(parts) == 2 and len(parts[0]) == 14 and parts[0].isdigit():
+        return parts[1]
+    return raw
+
+
 def _persistable_tool_metadata(tool_metadata: dict[str, object] | None) -> dict[str, Any]:
     if not isinstance(tool_metadata, dict):
         return {}
@@ -74,6 +85,7 @@ def save_session_snapshot(
     session_dir = get_project_session_dir(cwd)
     sid = session_id or uuid4().hex[:12]
     now = time.time()
+    timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime(now))
     messages = sanitize_conversation_messages(messages)
     # Extract a summary from the first user message
     summary = ""
@@ -94,14 +106,14 @@ def save_session_snapshot(
         "summary": summary,
         "message_count": len(messages),
     }
-    data = json.dumps(payload, indent=2) + "\n"
+    data = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
     # Save as latest
     latest_path = session_dir / "latest.json"
     atomic_write_text(latest_path, data)
 
     # Save by session ID
-    session_path = session_dir / f"session-{sid}.json"
+    session_path = session_dir / f"session-{timestamp}-{sid}.json"
     atomic_write_text(session_path, data)
 
     return latest_path
@@ -138,7 +150,7 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
     for path in sorted(session_dir.glob("session-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            sid = data.get("session_id", path.stem.replace("session-", ""))
+            sid = data.get("session_id", _fallback_session_id_from_path(path))
             seen_ids.add(sid)
             summary = data.get("summary", "")
             if not summary:
@@ -198,6 +210,12 @@ def load_session_by_id(cwd: str | Path, session_id: str) -> dict[str, Any] | Non
     path = session_dir / f"session-{session_id}.json"
     if path.exists():
         return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
+    # New format: session-YYYYMMDDHHMMSS-{session_id}.json
+    for candidate in sorted(session_dir.glob(f"session-*-{session_id}.json"), reverse=True):
+        try:
+            return _sanitize_snapshot_payload(json.loads(candidate.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            continue
     # Fallback to latest.json if session_id matches
     latest = session_dir / "latest.json"
     if latest.exists():

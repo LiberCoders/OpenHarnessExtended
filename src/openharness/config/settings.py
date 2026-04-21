@@ -465,6 +465,7 @@ class Settings(BaseModel):
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     allow_project_plugins: bool = False
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    mobile_gui: dict[str, Any] = Field(default_factory=dict)
 
     # UI
     theme: str = "default"

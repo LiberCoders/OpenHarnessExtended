@@ -108,7 +108,7 @@ class GuiPlusBackend(GuiInferenceBackend):
         """Parse GUI-Plus response using official <tool_call> extraction flow."""
         payload = _extract_gui_plus_arguments(response_text)
         if payload is None:
-            return GuiAction(action="wait", seconds=1.0, message="parse_failed")
+            raise ValueError("Failed to parse GUI-Plus tool_call arguments")
         action = str(payload.get("action") or "").strip().lower()
         if action == "click":
             coordinate = payload.get("coordinate")
@@ -116,7 +116,7 @@ class GuiPlusBackend(GuiInferenceBackend):
                 x, y = coordinate[0], coordinate[1]
                 if isinstance(x, (int, float)) and isinstance(y, (int, float)):
                     return GuiAction(action="click", x=int(round(x)), y=int(round(y)))
-            return GuiAction(action="wait", seconds=1.0, message="invalid_click_payload")
+            raise ValueError(f"Invalid click payload: {payload!r}")
         if action == "wait":
             seconds = payload.get("seconds")
             if seconds is None:
@@ -131,7 +131,7 @@ class GuiPlusBackend(GuiInferenceBackend):
             status = str(payload.get("status") or "success")
             message = str(payload.get("message") or payload.get("text") or "")
             return GuiAction(action="terminate", status=status, message=message)
-        return GuiAction(action="wait", seconds=1.0, message=f"unsupported_action:{action}")
+        raise ValueError(f"Unsupported action: {action}")
 
     def adapt_action(self, *, action: GuiAction, observation: Observation) -> GuiAction:
         if action.action != "click" or action.x is None or action.y is None:

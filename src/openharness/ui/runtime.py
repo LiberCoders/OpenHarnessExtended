@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from dataclasses import dataclass, field
@@ -359,6 +360,11 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
     """Close runtime-owned resources."""
     from openharness.sandbox.session import stop_docker_sandbox
 
+    try:
+        await _shutdown_async_agents(bundle.engine.tool_metadata)
+    except Exception:
+        pass
+
     await stop_docker_sandbox()
     # Extract local environment rules from session before closing
     try:
@@ -372,6 +378,218 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
         HookEvent.SESSION_END,
         {"cwd": bundle.cwd, "event": HookEvent.SESSION_END.value},
     )
+
+
+def _async_agent_task_entries(tool_metadata: dict[str, object] | None) -> list[dict[str, object]]:
+    if not isinstance(tool_metadata, dict):
+        return []
+    value = tool_metadata.get("async_agent_tasks")
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in value if isinstance(entry, dict)]
+
+
+def _build_terminal_notice(entry: dict[str, object]) -> str:
+    agent_id = str(entry.get("agent_id") or entry.get("task_id") or "").strip() or "unknown"
+    status = str(entry.get("status") or "unknown").strip() or "unknown"
+    return_code = entry.get("return_code")
+    details = [f"{agent_id} finished with status={status}"]
+    if isinstance(return_code, int):
+        details.append(f"exit_code={return_code}")
+    last_message = str(entry.get("last_message") or "").strip()
+    if last_message:
+        details.append(f"message={last_message[:200]}")
+    return ", ".join(details)
+
+
+def _refresh_async_agent_queue_state(tool_metadata: dict[str, object] | None) -> None:
+    """Refresh async agent statuses once and record terminal update notices."""
+    if not isinstance(tool_metadata, dict):
+        return
+
+    from openharness.extended.channel import get_channel_registry
+    from openharness.tasks.manager import get_task_manager
+
+    terminal_statuses = {"completed", "failed", "killed"}
+    manager = get_task_manager()
+    channel_registry = get_channel_registry()
+
+    for entry in _async_agent_task_entries(tool_metadata):
+        task_id = str(entry.get("task_id") or "").strip()
+        if not task_id:
+            continue
+        source_tool = str(entry.get("source_tool") or "").strip()
+        terminal_update = False
+
+        if source_tool == "spawn_agent":
+            agent_id = str(entry.get("agent_id") or task_id).strip()
+            handle = channel_registry.get_by_agent_id(agent_id)
+            if handle is None:
+                entry["status"] = "missing"
+                entry["is_running"] = False
+                continue
+
+            channel_registry.refresh(handle)
+            queue_status = str(handle.status or "").strip().lower()
+            entry["last_action"] = handle.last_action
+            entry["last_message"] = handle.last_message
+            entry["last_screenshot"] = handle.last_screenshot
+
+            if queue_status in terminal_statuses:
+                entry["status"] = queue_status
+                entry["return_code"] = handle.process.exitcode
+                entry["is_running"] = False
+                terminal_update = True
+            elif handle.process.is_alive():
+                entry["status"] = "running"
+                entry["is_running"] = True
+            else:
+                code = handle.process.exitcode
+                entry["return_code"] = code
+                entry["status"] = "completed" if code == 0 else "failed"
+                entry["is_running"] = False
+                terminal_update = True
+        else:
+            task = manager.get_task(task_id)
+            if task is None:
+                entry["status"] = "missing"
+                entry["is_running"] = False
+                continue
+            entry["status"] = task.status
+            entry["return_code"] = task.return_code
+            entry["is_running"] = task.status not in terminal_statuses
+            terminal_update = task.status in terminal_statuses
+
+        if terminal_update:
+            entry["has_terminal_update"] = True
+            entry["terminal_status"] = entry.get("status")
+            if not bool(entry.get("terminal_notice_pending")):
+                entry["terminal_notice_pending"] = True
+                entry["terminal_notice_text"] = _build_terminal_notice(entry)
+
+
+def _pending_terminal_notices(tool_metadata: dict[str, object] | None) -> list[str]:
+    notices: list[str] = []
+    for entry in _async_agent_task_entries(tool_metadata):
+        if not bool(entry.get("terminal_notice_pending")):
+            continue
+        text = str(entry.get("terminal_notice_text") or "").strip()
+        if text:
+            notices.append(text)
+    return notices
+
+
+def _mark_terminal_notices_delivered(tool_metadata: dict[str, object] | None) -> None:
+    for entry in _async_agent_task_entries(tool_metadata):
+        if bool(entry.get("terminal_notice_pending")):
+            entry["terminal_notice_pending"] = False
+            entry["terminal_notice_delivered"] = True
+
+
+def _merge_prompt_with_terminal_notices(prompt: str, notices: list[str]) -> str:
+    if not notices:
+        return prompt
+    notice_lines = "\n".join(f"- {item}" for item in notices)
+    return (
+        "Background agent terminal updates:\n"
+        f"{notice_lines}\n\n"
+        "User request:\n"
+        f"{prompt}"
+    )
+
+
+def _terminate_process_handle(process: object) -> None:
+    terminate = getattr(process, "terminate", None)
+    if callable(terminate):
+        terminate()
+
+
+def _kill_process_handle(process: object) -> None:
+    kill = getattr(process, "kill", None)
+    if callable(kill):
+        kill()
+
+
+async def _shutdown_async_agents(tool_metadata: dict[str, object] | None) -> None:
+    """Ensure no background async agents survive runtime shutdown."""
+    if not isinstance(tool_metadata, dict):
+        return
+
+    from openharness.extended.channel import get_channel_registry
+    from openharness.tasks.manager import get_task_manager
+
+    terminal_statuses = {"completed", "failed", "killed", "missing"}
+    manager = get_task_manager()
+    channel_registry = get_channel_registry()
+    spawn_handles: list[tuple[dict[str, object], object]] = []
+
+    _refresh_async_agent_queue_state(tool_metadata)
+    for entry in _async_agent_task_entries(tool_metadata):
+        task_id = str(entry.get("task_id") or "").strip()
+        if not task_id:
+            continue
+        if str(entry.get("source_tool") or "").strip() == "spawn_agent":
+            agent_id = str(entry.get("agent_id") or task_id).strip()
+            handle = channel_registry.get_by_agent_id(agent_id)
+            if handle is None:
+                continue
+            channel_registry.refresh(handle)
+            if handle.process.is_alive():
+                try:
+                    channel_registry.send_downlink(
+                        handle,
+                        kind="terminate",
+                        payload={"text": "", "message": "terminated by runtime shutdown"},
+                    )
+                except Exception:
+                    pass
+                spawn_handles.append((entry, handle))
+            continue
+
+        task = manager.get_task(task_id)
+        if task is None or task.status in terminal_statuses:
+            continue
+        try:
+            await manager.stop_task(task_id)
+            entry["status"] = "killed"
+            entry["is_running"] = False
+            entry["return_code"] = task.return_code
+        except Exception:
+            pass
+
+    if not spawn_handles:
+        return
+
+    deadline = asyncio.get_running_loop().time() + 3.0
+    while asyncio.get_running_loop().time() < deadline:
+        alive = False
+        for entry, handle in spawn_handles:
+            channel_registry.refresh(handle)
+            if handle.process.is_alive():
+                alive = True
+            else:
+                entry["status"] = str(handle.status or "killed")
+                entry["is_running"] = False
+                entry["return_code"] = handle.process.exitcode
+        if not alive:
+            break
+        await asyncio.sleep(0.1)
+
+    for entry, handle in spawn_handles:
+        if not handle.process.is_alive():
+            continue
+        try:
+            _terminate_process_handle(handle.process)
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+        if handle.process.is_alive():
+            try:
+                _kill_process_handle(handle.process)
+            except Exception:
+                pass
+        entry["status"] = "killed"
+        entry["is_running"] = False
 
 
 def _last_user_text(messages: list[ConversationMessage]) -> str:
@@ -489,6 +707,8 @@ async def handle_line(
     clear_output: ClearHandler,
 ) -> bool:
     """Handle one submitted line for either headless or TUI rendering."""
+    _refresh_async_agent_queue_state(bundle.engine.tool_metadata)
+    terminal_notices = _pending_terminal_notices(bundle.engine.tool_metadata)
     if not bundle.external_api_client:
         bundle.hook_executor.update_registry(
             load_hook_registry(bundle.current_settings(), bundle.current_plugins())
@@ -521,7 +741,7 @@ async def handle_line(
             if result.submit_model:
                 bundle.engine.set_model(result.submit_model)
             settings = bundle.current_settings()
-            submit_prompt = result.submit_prompt
+            submit_prompt = _merge_prompt_with_terminal_notices(result.submit_prompt, terminal_notices)
             system_prompt = build_runtime_system_prompt(
                 settings,
                 cwd=bundle.cwd,
@@ -531,6 +751,8 @@ async def handle_line(
             )
             bundle.engine.set_system_prompt(system_prompt)
             try:
+                if terminal_notices:
+                    _mark_terminal_notices_delivered(bundle.engine.tool_metadata)
                 async for event in bundle.engine.submit_message(submit_prompt):
                     await render_event(event)
             except MaxTurnsExceeded as exc:
@@ -586,16 +808,19 @@ async def handle_line(
     settings = bundle.current_settings()
     if bundle.enforce_max_turns:
         bundle.engine.set_max_turns(settings.max_turns)
+    effective_line = _merge_prompt_with_terminal_notices(line, terminal_notices)
     system_prompt = build_runtime_system_prompt(
         settings,
         cwd=bundle.cwd,
-        latest_user_prompt=line,
+        latest_user_prompt=effective_line,
         extra_skill_dirs=bundle.extra_skill_dirs,
         extra_plugin_roots=bundle.extra_plugin_roots,
     )
     bundle.engine.set_system_prompt(system_prompt)
     try:
-        async for event in bundle.engine.submit_message(line):
+        if terminal_notices:
+            _mark_terminal_notices_delivered(bundle.engine.tool_metadata)
+        async for event in bundle.engine.submit_message(effective_line):
             await render_event(event)
     except MaxTurnsExceeded as exc:
         await print_system(f"Stopped after {exc.max_turns} turns (max_turns).")

@@ -255,9 +255,17 @@ def _remember_async_agent_activity(
         summary = f"Spawned async agent. {description}".strip()
         if output.strip():
             summary = f"{summary} [{output.strip()[:180]}]".strip()
+    elif tool_name == "spawn_agent":
+        description = str(tool_input.get("task") or "").strip()
+        summary = f"Spawned heterogeneous agent. {description}".strip()
+        if output.strip():
+            summary = f"{summary} [{output.strip()[:180]}]".strip()
     elif tool_name == "send_message":
         target = str(tool_input.get("task_id") or "").strip()
         summary = f"Sent follow-up message to async agent {target}".strip()
+    elif tool_name == "send_to_agent":
+        target = str(tool_input.get("agent_id") or "").strip()
+        summary = f"Sent control message to heterogeneous agent {target}".strip()
     else:
         summary = output.strip()[:220] or f"Async agent activity via {tool_name}"
     bucket.append(summary)
@@ -288,14 +296,19 @@ def _remember_async_agent_task(
     output: str,
     result_metadata: dict[str, object] | None = None,
 ) -> None:
-    if tool_name != "agent":
+    if tool_name not in {"agent", "spawn_agent"}:
         return
     identity = _parse_spawned_agent_identity(output, result_metadata)
     if identity is None:
         return
     agent_id, task_id = identity
     bucket = _tool_metadata_bucket(tool_metadata, "async_agent_tasks")
-    description = str(tool_input.get("description") or tool_input.get("prompt") or "").strip()
+    description = str(
+        tool_input.get("description")
+        or tool_input.get("prompt")
+        or tool_input.get("task")
+        or ""
+    ).strip()
     entry = {
         "agent_id": agent_id,
         "task_id": task_id,
@@ -303,7 +316,12 @@ def _remember_async_agent_task(
         "status": "spawned",
         "notification_sent": False,
         "spawned_at": time.time(),
+        "source_tool": tool_name,
     }
+    if isinstance(result_metadata, dict):
+        state_root = str(result_metadata.get("state_root") or "").strip()
+        if state_root:
+            entry["state_root"] = state_root
     bucket[:] = [
         existing
         for existing in bucket
@@ -371,7 +389,7 @@ def _record_tool_carryover(
         if skill_name:
             _remember_active_artifact(context.tool_metadata, f"skill:{skill_name}")
             _remember_verified_work(context.tool_metadata, f"Loaded skill {skill_name}")
-    elif tool_name in {"agent", "send_message"}:
+    elif tool_name in {"agent", "send_message", "spawn_agent", "send_to_agent"}:
         _remember_async_agent_activity(
             context.tool_metadata,
             tool_name=tool_name,
@@ -441,7 +459,7 @@ def _record_tool_carryover(
             context.tool_metadata,
             entry=f"Loaded skill {str(tool_input.get('name') or '').strip()}",
         )
-    elif tool_name in {"agent", "send_message"}:
+    elif tool_name in {"agent", "send_message", "spawn_agent", "send_to_agent"}:
         _remember_work_log(
             context.tool_metadata,
             entry=f"Async agent action via {tool_name}",

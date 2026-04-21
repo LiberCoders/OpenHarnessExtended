@@ -32,7 +32,6 @@ class ReasoningOutcome:
 
     raw_response: str
     model_request: dict[str, Any] | None
-    raw_action: dict[str, Any] | None
     parsed_action: GuiAction
     adapted_action: GuiAction
 

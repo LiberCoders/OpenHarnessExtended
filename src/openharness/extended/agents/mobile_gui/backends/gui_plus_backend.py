@@ -104,34 +104,34 @@ class GuiPlusBackend(GuiInferenceBackend):
         )
         return text, request_payload
 
-    def parse_action(self, response_text: str) -> tuple[GuiAction, dict[str, Any] | None]:
+    def parse_action(self, response_text: str) -> GuiAction:
         """Parse GUI-Plus response using official <tool_call> extraction flow."""
         payload = _extract_gui_plus_arguments(response_text)
         if payload is None:
-            return GuiAction(action="wait", seconds=1.0, message="parse_failed"), None
+            return GuiAction(action="wait", seconds=1.0, message="parse_failed")
         action = str(payload.get("action") or "").strip().lower()
         if action == "click":
             coordinate = payload.get("coordinate")
             if isinstance(coordinate, list) and len(coordinate) >= 2:
                 x, y = coordinate[0], coordinate[1]
                 if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-                    return GuiAction(action="click", x=int(round(x)), y=int(round(y))), payload
-            return GuiAction(action="wait", seconds=1.0, message="invalid_click_payload"), payload
+                    return GuiAction(action="click", x=int(round(x)), y=int(round(y)))
+            return GuiAction(action="wait", seconds=1.0, message="invalid_click_payload")
         if action == "wait":
             seconds = payload.get("seconds")
             if seconds is None:
                 seconds = payload.get("time")
             if isinstance(seconds, (int, float)):
-                return GuiAction(action="wait", seconds=float(seconds)), payload
-            return GuiAction(action="wait", seconds=1.0), payload
+                return GuiAction(action="wait", seconds=float(seconds))
+            return GuiAction(action="wait", seconds=1.0)
         if action == "answer":
             message = str(payload.get("text") or payload.get("message") or "")
-            return GuiAction(action="terminate", status="success", message=message), payload
+            return GuiAction(action="terminate", status="success", message=message)
         if action == "terminate":
             status = str(payload.get("status") or "success")
             message = str(payload.get("message") or payload.get("text") or "")
-            return GuiAction(action="terminate", status=status, message=message), payload
-        return GuiAction(action="wait", seconds=1.0, message=f"unsupported_action:{action}"), payload
+            return GuiAction(action="terminate", status=status, message=message)
+        return GuiAction(action="wait", seconds=1.0, message=f"unsupported_action:{action}")
 
     def adapt_action(self, *, action: GuiAction, observation: Observation) -> GuiAction:
         if action.action != "click" or action.x is None or action.y is None:

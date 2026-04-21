@@ -19,7 +19,7 @@ class GuiInferenceBackend(ABC):
         """Return raw model response text and serialized request payload."""
 
     @abstractmethod
-    def parse_action(self, response_text: str) -> tuple[GuiAction, dict[str, Any] | None]:
+    def parse_action(self, response_text: str) -> GuiAction:
         """Parse backend response text into an executable action."""
         raise NotImplementedError
 

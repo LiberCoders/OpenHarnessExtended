@@ -8,8 +8,8 @@
 1. **任务理解与分解**：分析任务结构，识别可并行执行的子任务
 2. **异构子任务分发**：
    - **CLI任务**：可在本地直接通过命令行完成
-   - **电脑UI任务**：需要截图→推理→操作→再截图的循环
-   - **手机UI任务**：需要在移动设备上执行类似的操作循环
+   - **电脑GUI任务**：需要截图→推理→操作→再截图的循环
+   - **手机GUI任务**：需要在移动设备上执行类似的操作循环
 3. **并行执行**：对于无依赖关系的子任务，同时启动多个Agent执行
 4. **结果汇总**：所有子任务完成后，整合结果返回给用户
 5. **双向通信**：
@@ -28,7 +28,7 @@
 
 | 需求 | 描述 | 优先级 |
 |------|------|--------|
-| **异构Agent支持** | 统一的Agent Loop架构，支持CLI/PC UI/Mobile/Browser等不同类型的Agent | P0 |
+| **异构Agent支持** | 统一的Agent Loop架构，支持CLI/PC GUI/Mobile GUI/Browser等不同类型的Agent | P0 |
 | **并行执行能力** | 支持模型在单轮中并行启动多个子Agent，主对话可同时执行本地任务 | P0 |
 | **双向通信机制** | 系统层自动上报 + 模型层主动通信，支持Master查看子Agent状态 | P0 |
 | **Agent生命周期** | 子Agent的启动、状态监控、消息收发、终止和结果收集 | P0 |
@@ -178,8 +178,8 @@
 |-----------|------|------|------|-----------|
 | **普通对话** | 上下文历史、用户输入 | 现有文本推理 | 文本回复、工具调用 | 已有能力 |
 | **CLI Agent** | 命令输出、文件状态 | 以现有推理主干为主 | Shell 命令执行 | P0 |
-| **PC UI Agent** | 截图、窗口状态 | 视觉+文本推理 | 鼠标/键盘控制 | P1 |
-| **Mobile UI Agent** | 手机截图、设备状态 | 视觉+文本推理 | ADB/HDC/Appium | P1 |
+| **PC GUI Agent** | 截图、窗口状态 | 视觉+文本推理 | 鼠标/键盘控制 | P1 |
+| **Mobile GUI Agent** | 手机截图、设备状态 | 视觉+文本推理 | ADB/HDC/Appium | P1 |
 | **Browser Agent** | DOM、页面截图、元素列表 | 结构化/视觉推理 | Playwright API | P1 |
 
 更远期的智能眼镜、IoT、车载、无人机等形态仍与这一抽象兼容，具体方向见第 9 节。
@@ -208,7 +208,7 @@ class UnifiedAgentLoop:
 
     def __init__(
         self,
-        perception_provider: PerceptionProvider,  # 热插拔点1：CLI/UI/Mobile各有不同
+        perception_provider: PerceptionProvider,  # 热插拔点1：CLI/GUI/Mobile各有不同
         reasoning_engine: ReasoningEngine,        # 热插拔点2：文本推理/视觉推理/结构化推理
         action_executor: ActionExecutor,          # 热插拔点3：Shell/pynput/adb/Playwright
         context_manager: ContextManager,
@@ -274,7 +274,7 @@ class ScreenshotPerception(PerceptionProvider):
 
 
 class MobilePerception(PerceptionProvider):
-    """Mobile UI操控：手机截图 + 设备状态."""
+    """Mobile GUI操控：手机截图 + 设备状态."""
 
     async def observe(self) -> Observation:
         screenshot = await self.adb_screenshot()
@@ -482,8 +482,8 @@ class HeterogeneousAgentFactory:
         )
 
     @staticmethod
-    def create_pc_ui_agent(task: str) -> UnifiedAgentLoop:
-        """PC UI Agent: 感知 = 截图 + UI分析."""
+    def create_pc_gui_agent(task: str) -> UnifiedAgentLoop:
+        """PC GUI Agent: 感知 = 截图 + GUI分析."""
         return UnifiedAgentLoop(
             perception=ScreenshotPerception(),
             reasoning=VisionEnabledReasoning(model="gpt-4-vision"),
@@ -492,8 +492,8 @@ class HeterogeneousAgentFactory:
         )
 
     @staticmethod
-    def create_mobile_agent(task: str) -> UnifiedAgentLoop:
-        """Mobile UI Agent: 感知 = 手机截图."""
+    def create_mobile_gui_agent(task: str) -> UnifiedAgentLoop:
+        """Mobile GUI Agent: 感知 = 手机截图."""
         return UnifiedAgentLoop(
             perception=MobilePerception(),
             reasoning=VisionEnabledReasoning(model="gpt-4-vision"),
@@ -527,7 +527,7 @@ class HeterogeneousAgentFactory:
            │                  │                  │
            ▼                  ▼                  ▼
      ┌───────────┐     ┌───────────┐     ┌────────────┐
-     │ CLI Agent  │     │ PC UI     │     │ Mobile UI  │   ...
+     │ CLI Agent  │     │ PC GUI    │     │ Mobile GUI │   ...
      │            │     │ Agent     │     │ Agent      │  (未来扩展)
      └─────┬─────┘     └─────┬─────┘     └──────┬─────┘
            │                 │                   │
@@ -564,8 +564,8 @@ class HeterogeneousAgentFactory:
 3. **并行执行**：对于无依赖的子任务，使用**并行工具调用**同时执行
 4. **异构Agent选择**：根据任务类型选择合适的Agent：
    - `type="cli"`：纯命令行操作（编译、脚本、文件操作等）
-   - `type="pc_ui"`：需要图形界面交互（点击、输入、截图验证等）
-   - `type="mobile_ui"`：需要在手机上执行的操作
+   - `type="pc_gui"`：需要图形界面交互（点击、输入、截图验证等）
+   - `type="mobile_gui"`：需要在手机上执行的图像交互操作
    - `type="browser"`：需要浏览器自动化操作（网页导航、表单填写等）
 
 ## CLI任务执行方式选择
@@ -589,7 +589,7 @@ CLI任务有两种执行方式，根据场景自主选择：
 主对话可以同时进行：
 1. 自己执行简单CLI任务
 2. 并行启动多个后台CLI子Agent
-3. 并行启动UI类子Agent（PC/Mobile）
+3. 并行启动GUI类子Agent（PC/Mobile）
 
 最大化利用并行能力，主对话不空闲等待。
 
@@ -597,7 +597,7 @@ CLI任务有两种执行方式，根据场景自主选择：
 - "构建项目并部署到测试环境" → 可并行：本地构建（CLI） + 准备部署环境（CLI）
 - "在电脑上配置环境，同时在手机上安装APP" →
   - 主对话：git status（快速查看）
-  - 后台：spawn_agent(type="cli", task="环境配置") + spawn_agent(type="mobile_ui", task="安装APP")
+  - 后台：spawn_agent(type="cli", task="环境配置") + spawn_agent(type="mobile_gui", task="安装APP")
 - "查询数据并生成报告" → 有依赖：先查询数据，看到结果后再生成报告
 
 **执行流程**：
@@ -621,7 +621,7 @@ class AgentLifecycleManager:
 
     async def spawn_agent(
         self,
-        agent_type: Literal["cli", "pc_ui", "mobile_ui", "browser"],
+        agent_type: Literal["cli", "pc_gui", "mobile_gui", "browser"],
         task_description: str,
         context: dict
     ) -> str:
@@ -652,7 +652,7 @@ class AgentLifecycleManager:
 
 **选择依据**：
 
-`BackgroundTaskManager` 已经具备任务 ID、stdout/stderr 聚合、状态查询和停止能力，这些能力对所有类型的子 Agent 都适用。CLI Agent 和 UI Agent 的差异在于 Agent 进程内部的感知/行动循环不同，而非进程管理方式不同。`AgentLifecycleManager` 只需做薄封装，把 `TaskRecord` 映射为 `AgentHandle`。
+`BackgroundTaskManager` 已经具备任务 ID、stdout/stderr 聚合、状态查询和停止能力，这些能力对所有类型的子 Agent 都适用。CLI Agent 和 GUI Agent 的差异在于 Agent 进程内部的感知/行动循环不同，而非进程管理方式不同。`AgentLifecycleManager` 只需做薄封装，把 `TaskRecord` 映射为 `AgentHandle`。
 
 ```python
 async def _start_agent(self, agent_id: str, agent_type: str, task: str) -> AgentHandle:
@@ -865,18 +865,18 @@ system_reporting:
 ```markdown
 [用户消息]: 帮我同时在电脑和手机上下载安装最新版本
 
-[工具调用]: spawn_agent(type="pc_ui", task="电脑下载安装")
-            spawn_agent(type="mobile_ui", task="手机下载安装")
+[工具调用]: spawn_agent(type="pc_gui", task="电脑下载安装")
+            spawn_agent(type="mobile_gui", task="手机下载安装")
 
-... (pc_ui_001 状态 running，不注入上下文) ...
+... (pc_gui_001 状态 running，不注入上下文) ...
 
-[System Event]: Agent "mobile_ui_002": error - 网络连接失败 (turn 2, 30s)
+[System Event]: Agent "mobile_gui_002": error - 网络连接失败 (turn 2, 30s)
 
 [模型思考]: 手机端出错了，电脑端还在运行，我需要处理手机端的问题...
 
-... (pc_ui_001 完成) ...
+... (pc_gui_001 完成) ...
 
-[System Event]: Agent "pc_ui_001": completed (turn 8, 120s)
+[System Event]: Agent "pc_gui_001": completed (turn 8, 120s)
 
 [模型思考]: 电脑端已完成，现在处理手机端...
 ```
@@ -891,7 +891,7 @@ class UnifiedMessageBus:
 
     def __init__(self, session_id: str):
         self._session_id = session_id
-        self._mailbox_root = Path.home() / ".openharness" / "sessions" / session_id
+        self._mailbox_root = Path.home() / ".openharness" / "stessions" / session_id
 
     async def send_to_agent(self, agent_id: str, message: Message) -> None:
         """Send message to specific agent."""
@@ -936,14 +936,14 @@ class SpawnAgentTool(BaseTool):
 
     Use this tool when you need to:
     1. Execute a CLI task independently
-    2. Perform UI operations on PC (with screenshot loop)
+    2. Perform GUI operations on PC (with screenshot loop)
     3. Control mobile device remotely
     4. Automate browser interactions
 
     For parallel tasks, call this tool multiple times in the same turn.
     """
 
-    agent_type: Literal["cli", "pc_ui", "mobile_ui", "browser"] = Field(
+    agent_type: Literal["cli", "pc_gui", "mobile_gui", "browser"] = Field(
         description="Type of agent to spawn"
     )
     task: str = Field(description="Task description for the agent")
@@ -1058,12 +1058,12 @@ class SendMessageToAgentTool(BaseTool):
 
 ### 3.3 感知层实现策略
 
-**PC UI Agent**：
+**PC GUI Agent**：
 - 截图工具：PyAutoGUI / MSS / Windows API
-- UI分析：Accessibility API + 可选的OCR/视觉模型
+- GUI分析：Accessibility API + 可选的OCR/视觉模型
 - 行动执行：PyAutoGUI（鼠标/键盘）
 
-**Mobile UI Agent**：
+**Mobile GUI Agent**：
 - 截图工具：adb screencap / Appium
 - UI分析：Android Accessibility / UIAutomator
 - 行动执行：adb shell input / Appium
@@ -1087,7 +1087,7 @@ class SendMessageToAgentTool(BaseTool):
 
 | 资源 | 约束 | 处理方式 |
 |------|------|---------|
-| 屏幕控制权 | 同一时刻只能有一个 PC UI Agent 操控同一块屏幕 | 由 `AgentLifecycleManager` 在 spawn 时检查，拒绝重复分配 |
+| 屏幕控制权 | 同一时刻只能有一个 PC GUI Agent 操控同一块屏幕 | 由 `AgentLifecycleManager` 在 spawn 时检查，拒绝重复分配 |
 | 设备连接 | 一台 Mobile 设备同一时刻只能被一个 Agent 控制 | 设备 ID 作为资源锁，spawn 时检查占用状态 |
 | 浏览器实例 | 不同 Browser Agent 可使用不同的 browser context 并行 | Playwright 原生支持多 context 隔离 |
 | CLI 环境 | 多个 CLI Agent 可以并行，但需注意工作目录和文件系统冲突 | 每个 Agent 使用独立工作目录 |
@@ -1097,7 +1097,7 @@ class SendMessageToAgentTool(BaseTool):
 **决策**：每种类型的子 Agent 使用独立组装的 `ToolRegistry`，而非共享主 Agent 的全局工具集。
 
 **理由**：
-- 不同 Agent 类型需要不同的工具（CLI Agent 需要 shell 工具，PC UI Agent 需要鼠标键盘工具）
+- 不同 Agent 类型需要不同的工具（CLI Agent 需要 shell 工具，PC GUI Agent 需要鼠标键盘工具）
 - 子 Agent 不应拥有 `spawn_agent` 等编排工具（避免子 Agent 无限嵌套派生）
 - 独立工具集也便于控制子 Agent 的能力边界
 
@@ -1116,11 +1116,11 @@ def _build_tool_registry(self, agent_type: str) -> ToolRegistry:
         registry.register(ShellTool())
         registry.register(FileReadTool())
         registry.register(FileWriteTool())
-    elif agent_type == "pc_ui":
+    elif agent_type == "pc_gui":
         registry.register(ScreenshotTool())
         registry.register(MouseClickTool())
         registry.register(KeyboardInputTool())
-    elif agent_type == "mobile_ui":
+    elif agent_type == "mobile_gui":
         registry.register(AdbScreencapTool())
         registry.register(AdbInputTool())
     elif agent_type == "browser":
@@ -1138,13 +1138,13 @@ def _build_tool_registry(self, agent_type: str) -> ToolRegistry:
 **机制**：
 
 - `QueryEngine` 已内置 `max_turns` 参数，子 Agent 复用此能力即可。
-- 默认值根据 Agent 类型不同而不同（CLI 任务通常轮次较少，UI 任务可能需要更多轮次）。
+- 默认值根据 Agent 类型不同而不同（CLI 任务通常轮次较少，GUI 任务可能需要更多轮次）。
 - 超过 `max_turns` 后触发 `MaxTurnsExceeded`，由系统层捕获并上报给 Master。
 
 | Agent 类型 | 建议默认 max_turns | 说明 |
 |-----------|-------------------|------|
 | CLI Agent | 8-16 | 命令执行通常较快收敛 |
-| PC UI Agent | 20-30 | 截图→推理→操作循环轮次较多 |
+| PC GUI Agent | 20-30 | 截图→推理→操作循环轮次较多 |
 | Mobile Agent | 20-30 | 同上 |
 | Browser Agent | 15-25 | 结构化操作效率高于纯视觉 |
 
@@ -1331,9 +1331,9 @@ async def build_extended_runtime(project_root: Path):
 
 **验收标准**：
 
-- CLI + 1 个 UI 类 Agent 可并行运行
+- CLI + 1 个 GUI 类 Agent 可并行运行
 - Browser Agent 能稳定执行结构化页面操作
-- 至少一种 UI Agent 能与主 Agent 完成基本消息协同
+- 至少一种 GUI Agent 能与主 Agent 完成基本消息协同
 
 ### 5.4 阶段四：上游同步加固与文档收敛
 
@@ -1454,8 +1454,8 @@ async def build_extended_runtime(project_root: Path):
 
 这些技术选型仍有效，但详细对比移交到各自专项文档：
 
-- PC UI Agent：采用 `mss + pynput`，详见 [pc-agent-implementation.md](./pc-agent-implementation.md)
-- Mobile UI Agent：第一阶段以 `ADB/HDC` 为主，`Appium` 为可选增强，详见 [mobile-agent-implementation.md](./mobile-agent-implementation.md)
+- PC GUI Agent：采用 `mss + pynput`，详见 [pc-agent-implementation.md](./pc-agent-implementation.md)
+- Mobile GUI Agent：第一阶段以 `ADB/HDC` 为主，`Appium` 为可选增强，详见 [mobile-agent-implementation.md](./mobile-agent-implementation.md)
 - Browser Agent：采用 `Playwright`，详见 [browser-agent-implementation.md](./browser-agent-implementation.md)
 
 这些专项方案在接入时仍需遵守本文的主原则：实现可以独立，但接入路径应优先复用 OpenHarness 主干。

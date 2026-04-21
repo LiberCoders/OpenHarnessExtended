@@ -18,6 +18,15 @@ class MobilePerception:
 
     async def observe(self, context: MobileGuiContext) -> Observation:
         screenshot_path = self._steps_dir / f"step_{context.step:04d}" / "screenshot.jpeg"
-        path = await self._driver.screenshot(screenshot_path)
+        result = await self._driver.screenshot(screenshot_path)
+        path = result.output_path or str(screenshot_path)
+        if not result.ok:
+            detail = " | ".join(
+                [
+                    f"cmd[{idx}]={item.command},exit={item.exit_code},stdout={item.stdout or '(empty)'},stderr={item.stderr or '(empty)'}"
+                    for idx, item in enumerate(result.results, start=1)
+                ]
+            )
+            raise RuntimeError(f"screenshot failed: {detail}")
         return Observation(screenshot_path=path, note=f"step={context.step}")
 

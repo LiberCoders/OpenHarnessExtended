@@ -4,7 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass
+class DeviceCommandResult:
+    command: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    ok: bool
+
+
+@dataclass
+class DeviceActionResult:
+    ok: bool
+    results: list[DeviceCommandResult]
+    output_path: str | None = None
+
 
 class HdcMobileDeviceDriver:
     """Execute minimal actions through hdc."""
@@ -12,19 +30,20 @@ class HdcMobileDeviceDriver:
     def __init__(self, *, cwd: Path, serial: str | None = None) -> None:
         self._cwd = cwd
         self._serial = serial
+        self._hdc_bin = shutil.which("hdc")
 
     def is_available(self) -> bool:
-        return shutil.which("hdc") is not None
+        return self._hdc_bin is not None
 
-    async def screenshot(self, output_path: Path) -> str:
+    async def screenshot(self, output_path: Path) -> DeviceActionResult:
+        self._require_hdc_available()
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.is_available():
-            output_path.write_text("hdc unavailable", encoding="utf-8")
-            return str(output_path)
-
         remote_path = "/data/local/tmp/openharness_screen.jpeg"
-        await self._run(["shell", "snapshot_display", "-f", remote_path])
-        await self._run(["file", "recv", remote_path, str(output_path)])
+        snap_result = await self._run(["shell", "snapshot_display", "-f", remote_path])
+        recv_result = await self._run(["file", "recv", remote_path, str(output_path)])
+        results = [snap_result, recv_result]
+        if not snap_result.ok or not recv_result.ok:
+            return DeviceActionResult(ok=False, results=results, output_path=str(output_path))
         if not output_path.is_file():
             raise RuntimeError(
                 "hdc screenshot recv completed but local file was not created: "
@@ -35,25 +54,42 @@ class HdcMobileDeviceDriver:
                 "hdc screenshot recv created empty file: "
                 f"{output_path}"
             )
-        return str(output_path)
+        return DeviceActionResult(ok=True, results=results, output_path=str(output_path))
 
-    async def click(self, x: int, y: int) -> None:
-        if not self.is_available():
-            return
-        await self._run(["shell", "uinput", "-T", "-c", str(x), str(y)])
+    async def click(self, x: int, y: int) -> DeviceActionResult:
+        self._require_hdc_available()
+        result = await self._run(["shell", "uinput", "-T", "-c", str(x), str(y)])
+        return DeviceActionResult(ok=result.ok, results=[result])
 
-    async def wait(self, seconds: float) -> None:
-        await asyncio.sleep(max(0.0, seconds))
+    async def wait(self, seconds: float) -> DeviceActionResult:
+        actual = max(0.0, seconds)
+        await asyncio.sleep(actual)
+        return DeviceActionResult(
+            ok=True,
+            results=[
+                DeviceCommandResult(
+                    command=f"sleep({actual})",
+                    exit_code=0,
+                    stdout="",
+                    stderr="",
+                    ok=True,
+                )
+            ],
+        )
 
     def _build_argv(self, tail_args: list[str]) -> list[str]:
-        hdc_bin = shutil.which("hdc") or "hdc"
-        argv = [hdc_bin]
+        self._require_hdc_available()
+        argv = [str(self._hdc_bin)]
         if self._serial:
             argv.extend(["-t", self._serial])
         argv.extend(tail_args)
         return argv
 
-    async def _run(self, tail_args: list[str]) -> None:
+    def _require_hdc_available(self) -> None:
+        if self._hdc_bin is None:
+            raise RuntimeError("hdc binary not found in PATH")
+
+    async def _run(self, tail_args: list[str]) -> DeviceCommandResult:
         argv = self._build_argv(tail_args)
         process = await asyncio.create_subprocess_exec(
             *argv,
@@ -63,12 +99,14 @@ class HdcMobileDeviceDriver:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout_data, stderr_data = await process.communicate()
-        if process.returncode == 0:
-            return
-        stderr_text = (stderr_data or b"").decode("utf-8", errors="replace").strip()
         stdout_text = (stdout_data or b"").decode("utf-8", errors="replace").strip()
-        detail = stderr_text or stdout_text or "(no output)"
-        raise RuntimeError(
-            f"hdc command failed (exit_code={process.returncode}): {' '.join(argv)}\n{detail}"
+        stderr_text = (stderr_data or b"").decode("utf-8", errors="replace").strip()
+        result = DeviceCommandResult(
+            command=" ".join(argv),
+            exit_code=int(process.returncode or 0),
+            stdout=stdout_text,
+            stderr=stderr_text,
+            ok=process.returncode == 0,
         )
+        return result
 

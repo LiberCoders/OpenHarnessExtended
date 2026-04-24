@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
-from openharness.extended.experts.mobile_gui.types import GuiAction, Observation
+from openharness.extended.experts.mobile_gui.types import GuiAction, InferResult, Observation
 
 
 class GuiInferenceBackend(ABC):
@@ -15,8 +14,8 @@ class GuiInferenceBackend(ABC):
     @abstractmethod
     async def infer(
         self, *, context: MobileGuiContext, observation: Observation
-    ) -> tuple[str, dict[str, Any] | None]:
-        """Return raw model response text and serialized request payload."""
+    ) -> InferResult:
+        """Return raw text, request payload, and reasoning content."""
 
     @abstractmethod
     def parse_action(self, response_text: str) -> GuiAction:

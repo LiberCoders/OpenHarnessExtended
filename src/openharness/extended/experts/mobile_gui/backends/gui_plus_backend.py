@@ -13,6 +13,7 @@ import mimetypes
 import re
 import struct
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from openai import OpenAI
 
 from openharness.extended.experts.mobile_gui.backends.base import GuiInferenceBackend
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
-from openharness.extended.experts.mobile_gui.types import GuiAction, Observation
+from openharness.extended.experts.mobile_gui.types import GuiAction, InferResult, Observation
 
 _MOBILE_TOOLS_JSON = r"""{"type": "function", "function": {"name_for_human": "mobile_use", "name": "mobile_use", "description": "Use a touchscreen to interact with a mobile device, and take screenshots.\n* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\n* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\n* The screen's resolution is 1000x1000.\n* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.", "parameters": {"properties": {"action": {"description": "The action to perform. The available actions are:\n* `key`: Perform a key event on the mobile device.\n* `click`: Click the point on the screen with coordinate (x, y).\n* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\n* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\n* `type`: Input the specified text into the activated input box.\n* `system_button`: Press the system button.\n* `open`: Open an app on the device.\n* `wait`: Wait specified seconds for the change to happen.\n* `answer`: Terminate the current task and output the answer.\n* `interact`: Resolve the blocking window by interacting with the user.\n* `terminate`: Terminate the current task and report its completion status.", "enum": ["key", "click", "long_press", "swipe", "type", "system_button", "open", "wait", "answer", "interact", "terminate"], "type": "string"}, "coordinate": {"description": "(x, y) coordinates.", "type": "array"}, "coordinate2": {"description": "(x, y) coordinates for swipe end.", "type": "array"}, "text": {"description": "Text payload for actions requiring text.", "type": "string"}, "time": {"description": "Seconds for long_press/wait.", "type": "number"}, "button": {"description": "System button.", "enum": ["Back", "Home", "Menu", "Enter"], "type": "string"}, "status": {"description": "Status for terminate.", "type": "string", "enum": ["success", "failure"]}}, "required": ["action"], "type": "object"}, "args_format": "Format the arguments as a JSON object."}}"""
 
@@ -76,7 +77,7 @@ class GuiPlusBackend(GuiInferenceBackend):
 
     async def infer(
         self, *, context: MobileGuiContext, observation: Observation
-    ) -> tuple[str, dict[str, Any] | None]:
+    ) -> InferResult:
         current_instruction = self._instruction or context.task
         if context.extra_instruction.strip():
             current_instruction = f"{current_instruction}\n补充要求：{context.extra_instruction.strip()}"
@@ -95,60 +96,49 @@ class GuiPlusBackend(GuiInferenceBackend):
             messages=messages,
             max_tokens=self._max_tokens,
         )
-        text = str(completion.choices[0].message.content or "")
+        message = completion.choices[0].message
+        text = str(message.content or "")
+        reasoning_content = str(getattr(message, "reasoning_content", "") or "")
         self._history.append(
             {
                 "output": text,
                 "image_path": observation.screenshot_path,
             }
         )
-        return text, request_payload
+        return InferResult(
+            raw_response=text,
+            model_request=request_payload,
+            reasoning_content=reasoning_content,
+        )
 
     def parse_action(self, response_text: str) -> GuiAction:
-        """Parse GUI-Plus response using official <tool_call> extraction flow."""
+        """Parse GUI-Plus response using a parser registry."""
         payload = _extract_gui_plus_arguments(response_text)
         if payload is None:
             raise ValueError("Failed to parse GUI-Plus tool_call arguments")
         action = str(payload.get("action") or "").strip().lower()
-        if action == "click":
-            coordinate = payload.get("coordinate")
-            if isinstance(coordinate, list) and len(coordinate) >= 2:
-                x, y = coordinate[0], coordinate[1]
-                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-                    return GuiAction(action="click", x=int(round(x)), y=int(round(y)))
-            raise ValueError(f"Invalid click payload: {payload!r}")
-        if action == "wait":
-            seconds = payload.get("seconds")
-            if seconds is None:
-                seconds = payload.get("time")
-            if isinstance(seconds, (int, float)):
-                return GuiAction(action="wait", seconds=float(seconds))
-            return GuiAction(action="wait", seconds=1.0)
-        if action == "answer":
-            message = str(payload.get("text") or payload.get("message") or "")
-            return GuiAction(action="terminate", status="success", message=message)
-        if action == "terminate":
-            status = str(payload.get("status") or "success")
-            message = str(payload.get("message") or payload.get("text") or "")
-            return GuiAction(action="terminate", status=status, message=message)
+        parser = _ACTION_PARSERS.get(action)
+        if parser is None and action in {"call_user", "calluser"}:
+            action = "interact"
+            parser = _ACTION_PARSERS.get(action)
+        if parser is not None:
+            return parser(payload)
         raise ValueError(f"Unsupported action: {action}")
 
     def adapt_action(self, *, action: GuiAction, observation: Observation) -> GuiAction:
-        if action.action != "click" or action.x is None or action.y is None:
+        fields = _ACTION_COORD_FIELDS.get(action.action)
+        if not fields:
             return action
-        mapped_x, mapped_y = _map_mobile_use_coordinate(
-            x=action.x,
-            y=action.y,
-            screenshot_path=observation.screenshot_path,
-        )
-        return GuiAction(
-            action=action.action,
-            x=mapped_x,
-            y=mapped_y,
-            seconds=action.seconds,
-            status=action.status,
-            message=action.message,
-        )
+        updates: dict[str, int] = {}
+        for fx, fy in fields:
+            x = getattr(action, fx)
+            y = getattr(action, fy)
+            if x is None or y is None:
+                continue
+            mx, my = _map_mobile_use_coordinate(x=x, y=y, screenshot_path=observation.screenshot_path)
+            updates[fx] = mx
+            updates[fy] = my
+        return replace(action, **updates) if updates else action
 
     def _build_messages(self, *, current_image_path: str, instruction: str) -> list[dict[str, Any]]:
         history_n = self._history_n
@@ -241,10 +231,194 @@ def _image_to_data_url(image_path: Path) -> str:
     return f"data:{mime};base64,{b64}"
 
 
+_KEY_NAME_TO_CODE: dict[str, int] = {
+    "back": 4,
+    "home": 3,
+    "enter": 66,
+    "menu": 82,
+    "search": 84,
+    "del": 67,
+    "delete": 67,
+    "volume_up": 24,
+    "volume_down": 25,
+    "power": 26,
+    "camera": 27,
+    "tab": 61,
+    "space": 62,
+    "dpad_up": 19,
+    "dpad_down": 20,
+    "dpad_left": 21,
+    "dpad_right": 22,
+    "dpad_center": 23,
+}
+
+
+def _parse_click(payload: dict[str, Any]) -> GuiAction:
+    c = _pick_xy_list(payload, "coordinate", "coordinate1")
+    if c is None or not _is_xy(c):
+        raise ValueError(f"Invalid click payload: {payload!r}")
+    return GuiAction(action="click", x=int(round(c[0])), y=int(round(c[1])))
+
+
+def _parse_wait(payload: dict[str, Any]) -> GuiAction:
+    seconds = payload.get("seconds")
+    if seconds is None:
+        seconds = payload.get("time")
+    return GuiAction(action="wait", seconds=float(seconds) if isinstance(seconds, (int, float)) else 1.0)
+
+
+def _parse_long_press(payload: dict[str, Any]) -> GuiAction:
+    c = _pick_xy_list(payload, "coordinate", "coordinate1")
+    if c is None or not _is_xy(c):
+        raise ValueError(f"Invalid long_press payload: {payload!r}")
+    t = payload.get("time")
+    if t is None:
+        t = payload.get("seconds")
+    sec = float(t) if isinstance(t, (int, float)) else 0.8
+    return GuiAction(action="long_press", x=int(round(c[0])), y=int(round(c[1])), seconds=sec)
+
+
+def _parse_swipe(payload: dict[str, Any]) -> GuiAction:
+    c1 = _pick_xy_list(payload, "coordinate", "coordinate1")
+    c2 = _pick_xy_list(payload, "coordinate2")
+    if c1 is None or c2 is None or not _is_xy(c1) or not _is_xy(c2):
+        raise ValueError(f"Invalid swipe payload: {payload!r}")
+    t = payload.get("time")
+    if t is None:
+        t = payload.get("seconds")
+    sec = float(t) if isinstance(t, (int, float)) else None
+    return GuiAction(
+        action="swipe",
+        x=int(round(c1[0])),
+        y=int(round(c1[1])),
+        x2=int(round(c2[0])),
+        y2=int(round(c2[1])),
+        seconds=sec,
+    )
+
+
+def _parse_type(payload: dict[str, Any]) -> GuiAction:
+    return GuiAction(action="type", text=str(payload.get("text") or ""))
+
+
+def _parse_open(payload: dict[str, Any]) -> GuiAction:
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise ValueError(f"open requires text: {payload!r}")
+    return GuiAction(action="open", text=text)
+
+
+def _parse_home(_: dict[str, Any]) -> GuiAction:
+    return GuiAction(action="home")
+
+
+def _parse_back(_: dict[str, Any]) -> GuiAction:
+    return GuiAction(action="back")
+
+
+def _parse_system_button(payload: dict[str, Any]) -> GuiAction:
+    button = str(payload.get("button") or "").strip()
+    if not button:
+        raise ValueError(f"system_button requires button: {payload!r}")
+    lowered = button.lower()
+    if lowered == "home":
+        return GuiAction(action="home")
+    if lowered == "back":
+        return GuiAction(action="back")
+    mapping = {"menu": 82, "enter": 66}
+    keycode = mapping.get(lowered)
+    if keycode is not None:
+        return GuiAction(action="key", keycode=keycode)
+    raise ValueError(f"Unsupported system_button: {button!r}")
+
+
+def _parse_key(payload: dict[str, Any]) -> GuiAction:
+    code = _parse_keycode(payload)
+    if code is None:
+        raise ValueError(f"Invalid key payload: {payload!r}")
+    if code == 3:
+        return GuiAction(action="home")
+    if code == 4:
+        return GuiAction(action="back")
+    return GuiAction(action="key", keycode=code)
+
+
+def _parse_interact(payload: dict[str, Any]) -> GuiAction:
+    text = str(payload.get("text") or payload.get("message") or "").strip()
+    return GuiAction(action="interact", text=text)
+
+
+def _parse_answer(payload: dict[str, Any]) -> GuiAction:
+    message = str(payload.get("text") or payload.get("message") or "")
+    return GuiAction(action="terminate", status="success", message=message)
+
+
+def _parse_terminate(payload: dict[str, Any]) -> GuiAction:
+    status = str(payload.get("status") or "success")
+    message = str(payload.get("message") or payload.get("text") or "")
+    return GuiAction(action="terminate", status=status, message=message)
+
+
+_ACTION_PARSERS: dict[str, Any] = {
+    "click": _parse_click,
+    "wait": _parse_wait,
+    "long_press": _parse_long_press,
+    "swipe": _parse_swipe,
+    "scroll": _parse_swipe,
+    "type": _parse_type,
+    "open": _parse_open,
+    "home": _parse_home,
+    "back": _parse_back,
+    "system_button": _parse_system_button,
+    "key": _parse_key,
+    "interact": _parse_interact,
+    "answer": _parse_answer,
+    "terminate": _parse_terminate,
+}
+
+_ACTION_COORD_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
+    "click": (("x", "y"),),
+    "long_press": (("x", "y"),),
+    "swipe": (("x", "y"), ("x2", "y2")),
+}
+
+
+def _parse_keycode(payload: dict[str, Any]) -> int | None:
+    raw = payload.get("keycode")
+    if raw is None:
+        raw = payload.get("key")
+    if raw is None:
+        raw = payload.get("text")
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        if s.isdigit():
+            return int(s)
+        return _KEY_NAME_TO_CODE.get(s.lower())
+    return None
+
+
+def _pick_xy_list(payload: dict[str, Any], *keys: str) -> list[Any] | None:
+    """Return the first list value among ``keys`` that has at least two numeric elements."""
+    for key in keys:
+        raw = payload.get(key)
+        if isinstance(raw, list) and len(raw) >= 2:
+            return raw
+    return None
+
+
+def _is_xy(values: list[Any]) -> bool:
+    return len(values) >= 2 and isinstance(values[0], (int, float)) and isinstance(values[1], (int, float))
+
+
 def _extract_gui_plus_arguments(response_text: str) -> dict[str, Any] | None:
     # Official flow: extract <tool_call> JSON blocks first.
     pattern = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL | re.IGNORECASE)
-    blocks = pattern.findall(response_text or "")
+    text_for_parse = str(response_text or "")
+    blocks = pattern.findall(text_for_parse)
     for block in blocks:
         blob = str(block).strip()
         try:
@@ -255,7 +429,7 @@ def _extract_gui_plus_arguments(response_text: str) -> dict[str, Any] | None:
         if isinstance(args, dict):
             return args
     # Fallback for occasional direct-JSON responses.
-    text = str(response_text or "")
+    text = text_for_parse
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:

@@ -21,9 +21,13 @@ class GuiAction:
     action: str
     x: int | None = None
     y: int | None = None
+    x2: int | None = None
+    y2: int | None = None
     seconds: float | None = None
+    keycode: int | None = None
     status: str | None = None
     message: str = ""
+    text: str = ""
 
 
 @dataclass
@@ -31,7 +35,17 @@ class ReasoningOutcome:
     """Reasoning output including raw response and action transforms."""
 
     raw_response: str
+    reasoning_content: str
     model_request: dict[str, Any] | None
     parsed_action: GuiAction
     adapted_action: GuiAction
+
+
+@dataclass
+class InferResult:
+    """Inference output returned by GUI backend infer()."""
+
+    raw_response: str
+    model_request: dict[str, Any] | None
+    reasoning_content: str = ""
 

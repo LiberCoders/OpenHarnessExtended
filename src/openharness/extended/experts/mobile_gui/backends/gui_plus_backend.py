@@ -145,8 +145,18 @@ class GuiPlusBackend(GuiInferenceBackend):
         current_step = len(self._history)
         history_start_idx = max(0, current_step - history_n)
 
+        # NOTE:
+        # The official snippet iterates `range(history_start_idx)`, which can produce
+        # unintuitive traces (for example, at step 5 with history_n=4 it only keeps step 1).
+        #
+        # We intentionally keep the *latest* up-to-N previous actions:
+        # - current_step <= history_n: include all previous steps;
+        # - current_step > history_n: include only the most recent history_n steps.
+        #
+        # This keeps textual "Previous actions" aligned with `history_tail` images
+        # below, so the model receives a consistent short-term trajectory.
         previous_actions: list[str] = []
-        for idx in range(history_start_idx):
+        for idx in range(history_start_idx, current_step):
             history_output_str = self._history[idx]["output"]
             if "Action:" in history_output_str and "<tool_call>" in history_output_str:
                 history_output_str = history_output_str.split("Action:", 1)[1].split("<tool_call>", 1)[0].strip()

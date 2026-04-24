@@ -4,28 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 
-
-@dataclass
-class DeviceCommandResult:
-    command: str
-    exit_code: int
-    stdout: str
-    stderr: str
-    ok: bool
+from openharness.extended.experts.mobile_gui.device.base import MobileDeviceDriver
+from openharness.extended.experts.mobile_gui.device.results import DeviceActionResult, DeviceCommandResult
 
 
-@dataclass
-class DeviceActionResult:
-    ok: bool
-    results: list[DeviceCommandResult]
-    output_path: str | None = None
-
-
-class HdcMobileDeviceDriver:
+class HdcMobileDeviceDriver(MobileDeviceDriver):
     """Execute minimal actions through hdc."""
+    transport_name = "hdc"
 
     def __init__(self, *, cwd: Path, serial: str | None = None) -> None:
         self._cwd = cwd
@@ -62,7 +49,7 @@ class HdcMobileDeviceDriver:
         return DeviceActionResult(ok=result.ok, results=[result])
 
     async def wait(self, seconds: float) -> DeviceActionResult:
-        actual = max(0.0, seconds)
+        actual = max(0.0, float(seconds))
         await asyncio.sleep(actual)
         return DeviceActionResult(
             ok=True,

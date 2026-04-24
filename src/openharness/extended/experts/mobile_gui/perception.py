@@ -5,14 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
-from openharness.extended.experts.mobile_gui.device.hdc import HdcMobileDeviceDriver
+from openharness.extended.experts.mobile_gui.device.base import MobileDeviceDriver
 from openharness.extended.experts.mobile_gui.types import Observation
 
 
 class MobilePerception:
     """Collect screenshots from the mobile device."""
 
-    def __init__(self, *, driver: HdcMobileDeviceDriver, steps_dir: Path) -> None:
+    def __init__(self, *, driver: MobileDeviceDriver, steps_dir: Path) -> None:
         self._driver = driver
         self._steps_dir = steps_dir
 

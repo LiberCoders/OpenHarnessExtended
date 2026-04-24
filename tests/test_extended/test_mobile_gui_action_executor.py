@@ -4,7 +4,7 @@ import pytest
 
 from openharness.extended.experts.mobile_gui.action_executor import ActionExecutor
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
-from openharness.extended.experts.mobile_gui.device.hdc import DeviceActionResult, DeviceCommandResult
+from openharness.extended.experts.mobile_gui.device.results import DeviceActionResult, DeviceCommandResult
 from openharness.extended.experts.mobile_gui.types import GuiAction
 
 

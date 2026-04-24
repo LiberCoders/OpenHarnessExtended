@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from openharness.extended.experts.mobile_gui.action_executor import ActionExecutor
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.device.adb import AdbMobileDeviceDriver
 from openharness.extended.experts.mobile_gui.device.results import DeviceActionResult, DeviceCommandResult
 from openharness.extended.experts.mobile_gui.types import GuiAction
 
@@ -66,3 +69,26 @@ async def test_action_executor_records_driver_result_on_click_failure() -> None:
     assert "exit_code[1]=1" in context.last_message
     assert "stdout[1]=(empty)" in context.last_message
     assert "stderr[1]=click failed" in context.last_message
+
+
+@pytest.mark.asyncio
+async def test_adb_list_user_packages_returns_action_result() -> None:
+    driver = AdbMobileDeviceDriver(cwd=Path("."), adb_path="adb")
+
+    async def fake_run_shell(_: str) -> DeviceCommandResult:
+        return DeviceCommandResult(
+            command="adb shell pm list packages -3",
+            exit_code=0,
+            stdout="package:com.example.app",
+            stderr="",
+            ok=True,
+        )
+
+    driver._run_shell = fake_run_shell  # type: ignore[method-assign]
+
+    result = await driver.list_user_packages()
+
+    assert isinstance(result, DeviceActionResult)
+    assert result.ok is True
+    assert len(result.results) == 1
+    assert result.results[0].command == "adb shell pm list packages -3"

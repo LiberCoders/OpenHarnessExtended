@@ -192,7 +192,8 @@ class AdbMobileDeviceDriver(MobileDeviceDriver):
 
     async def list_user_packages(self) -> DeviceActionResult:
         """`pm list packages -3` — third-party packages only."""
-        return await self._run_shell("pm list packages -3")
+        result = await self._run_shell("pm list packages -3")
+        return DeviceActionResult(ok=result.ok, results=[result])
 
     async def _launch_package(self, package_name: str) -> DeviceActionResult:
         pkg = package_name.strip()

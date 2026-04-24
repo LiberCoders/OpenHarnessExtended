@@ -27,6 +27,7 @@ from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
 logger = logging.getLogger(__name__)
 
 FALLBACK_EXPERT_TYPE_SLUG = "unspecified"
+_DEFAULT_POST_ACTION_SETTLE_SECONDS = 0.35
 
 WORKER_IMPLEMENTED_EXPERT_TYPES: frozenset[str] = frozenset({"mobile_gui"})
 
@@ -96,6 +97,14 @@ def _resolve_expert_id(config: ExpertRunConfig) -> str:
     return config.expert_id or f"{type_slug}_{fallback_ts}_{uuid4().hex[:6]}"
 
 
+def _to_non_negative_float(value: object, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return max(0.0, default)
+    return max(0.0, parsed)
+
+
 @dataclass
 class ExpertLoopPack:
     """Everything the shared perceive→think→act step loop needs for one worker run."""
@@ -108,6 +117,7 @@ class ExpertLoopPack:
     reasoning: Any
     executor: Any
     backend: Any | None
+    post_action_settle_seconds: float = 0.0
 
     async def run_steps(self, channel) -> str:
         """Generic max_steps loop: downlink, observe, think, act, persist, status uplink."""
@@ -136,6 +146,12 @@ class ExpertLoopPack:
             outcome = await self.reasoning.think(self.context, observation)
             action = outcome.adapted_action
             await self.executor.execute(action, self.context)
+            if (
+                not self.context.done
+                and action.action != "wait"
+                and self.post_action_settle_seconds > 0
+            ):
+                await asyncio.sleep(self.post_action_settle_seconds)
 
             step_payload = {
                 "step": self.context.step,
@@ -186,6 +202,15 @@ def build_expert_loop_pack(
             runtime_overrides,
             type_section if isinstance(type_section, dict) else None,
         )
+        # Small settle delay between "action executed" and next screenshot.
+        # Purpose: absorb UI commit/animation latency to reduce stale-frame captures
+        # after tap/swipe/navigation. This is transport-agnostic (adb/hdc both issue
+        # input commands before UI rendering is fully stable), so we keep one shared
+        # default and allow overriding via mobile_gui.post_action_settle_seconds.
+        post_action_settle_seconds = _to_non_negative_float(
+            mobile_gui_opts.get("post_action_settle_seconds"),
+            default=_DEFAULT_POST_ACTION_SETTLE_SECONDS,
+        )
         transport = str(mobile_gui_opts.get("device_transport") or "").strip().lower()
         driver = create_mobile_driver(
             transport=transport,
@@ -214,6 +239,7 @@ def build_expert_loop_pack(
             reasoning=reasoning,
             executor=executor,
             backend=backend,
+            post_action_settle_seconds=post_action_settle_seconds,
         )
 
     raise RuntimeError(f"no loop pack builder for expert_type={config.expert_type!r}")

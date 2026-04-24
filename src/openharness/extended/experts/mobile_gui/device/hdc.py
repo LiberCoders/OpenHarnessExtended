@@ -101,8 +101,9 @@ class HdcMobileDeviceDriver:
         stdout_data, stderr_data = await process.communicate()
         stdout_text = (stdout_data or b"").decode("utf-8", errors="replace").strip()
         stderr_text = (stderr_data or b"").decode("utf-8", errors="replace").strip()
+        display_argv = [Path(argv[0]).name, *argv[1:]]
         result = DeviceCommandResult(
-            command=" ".join(argv),
+            command=" ".join(display_argv),
             exit_code=int(process.returncode or 0),
             stdout=stdout_text,
             stderr=stderr_text,

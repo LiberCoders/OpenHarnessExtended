@@ -1,2 +1,0 @@
-"""Heterogeneous agent implementations."""
-

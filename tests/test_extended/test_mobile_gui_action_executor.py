@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from openharness.extended.agents.mobile_gui.action_executor import ActionExecutor
-from openharness.extended.agents.mobile_gui.context import MobileGuiContext
-from openharness.extended.agents.mobile_gui.device.hdc import DeviceActionResult, DeviceCommandResult
-from openharness.extended.agents.mobile_gui.types import GuiAction
+from openharness.extended.experts.mobile_gui.action_executor import ActionExecutor
+from openharness.extended.experts.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.device.hdc import DeviceActionResult, DeviceCommandResult
+from openharness.extended.experts.mobile_gui.types import GuiAction
 
 
 class _FakeDriver:

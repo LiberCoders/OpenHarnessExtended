@@ -5,8 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from openharness.extended.agents.mobile_gui.context import MobileGuiContext
-from openharness.extended.agents.mobile_gui.types import GuiAction, Observation
+from openharness.extended.experts.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.types import GuiAction, Observation
 
 
 class GuiInferenceBackend(ABC):

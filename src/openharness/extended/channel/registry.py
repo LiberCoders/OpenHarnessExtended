@@ -1,4 +1,4 @@
-"""Leader-side in-memory registry for spawned heterogeneous agents."""
+"""Leader-side in-memory registry for spawned experts."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from openharness.extended.channel.ipc import LeaderQueueChannel
 
 
 @dataclass
-class AgentHandle:
-    """Runtime tracking data for one spawned heterogeneous agent."""
+class ExpertHandle:
+    """Runtime tracking data for one spawned expert."""
 
-    agent_id: str
-    agent_type: str
+    expert_id: str
+    expert_type: str
     task_id: str
     channel: LeaderQueueChannel
     process: Any
@@ -29,23 +29,23 @@ class ChannelRegistry:
     """Small registry used by spawn/query/send tools."""
 
     def __init__(self) -> None:
-        self._handles: dict[str, AgentHandle] = {}
-        self._task_to_agent: dict[str, str] = {}
+        self._handles: dict[str, ExpertHandle] = {}
+        self._task_to_expert: dict[str, str] = {}
 
-    def register(self, handle: AgentHandle) -> None:
-        self._handles[handle.agent_id] = handle
-        self._task_to_agent[handle.task_id] = handle.agent_id
+    def register(self, handle: ExpertHandle) -> None:
+        self._handles[handle.expert_id] = handle
+        self._task_to_expert[handle.task_id] = handle.expert_id
 
-    def get_by_agent_id(self, agent_id: str) -> AgentHandle | None:
-        return self._handles.get(agent_id)
+    def get_by_expert_id(self, expert_id: str) -> ExpertHandle | None:
+        return self._handles.get(expert_id)
 
-    def get_by_task_id(self, task_id: str) -> AgentHandle | None:
-        agent_id = self._task_to_agent.get(task_id)
-        if not agent_id:
+    def get_by_task_id(self, task_id: str) -> ExpertHandle | None:
+        expert_id = self._task_to_expert.get(task_id)
+        if not expert_id:
             return None
-        return self._handles.get(agent_id)
+        return self._handles.get(expert_id)
 
-    def refresh(self, handle: AgentHandle) -> AgentHandle:
+    def refresh(self, handle: ExpertHandle) -> ExpertHandle:
         for message in handle.channel.read_for_leader():
             if message.kind != "status":
                 continue
@@ -56,7 +56,7 @@ class ChannelRegistry:
             handle.last_screenshot = str(payload.get("last_screenshot") or handle.last_screenshot)
         return handle
 
-    def send_downlink(self, handle: AgentHandle, *, kind: str, payload: dict[str, Any]) -> None:
+    def send_downlink(self, handle: ExpertHandle, *, kind: str, payload: dict[str, Any]) -> None:
         handle.channel.send_to_worker(kind=kind, payload=payload)
 
 

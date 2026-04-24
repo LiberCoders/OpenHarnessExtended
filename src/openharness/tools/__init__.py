@@ -45,9 +45,9 @@ from openharness.tools.web_search_tool import WebSearchTool
 
 def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
     """Return the default built-in tool registry."""
-    from openharness.extended.tools.query_agent_status_tool import QueryAgentStatusTool
-    from openharness.extended.tools.send_to_agent_tool import SendToAgentTool
-    from openharness.extended.tools.spawn_agent_tool import SpawnAgentTool
+    from openharness.extended.tools.get_expert_status_tool import GetExpertStatusTool
+    from openharness.extended.tools.send_to_expert_tool import SendToExpertTool
+    from openharness.extended.tools.delegate_to_expert_tool import DelegateToExpertTool
 
     registry = ToolRegistry()
     for tool in (
@@ -84,9 +84,9 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         TaskStopTool(),
         TaskOutputTool(),
         TaskUpdateTool(),
-        SpawnAgentTool(),
-        QueryAgentStatusTool(),
-        SendToAgentTool(),
+        DelegateToExpertTool(),
+        GetExpertStatusTool(),
+        SendToExpertTool(),
         AgentTool(),
         SendMessageTool(),
         TeamCreateTool(),

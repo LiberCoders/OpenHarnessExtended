@@ -1,4 +1,4 @@
-"""On-disk state layout for heterogeneous agent workers (meta / steps / result)."""
+"""On-disk state layout for expert workers (meta / steps / result)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 
 class MobileGuiStateStore:
-    """JSON artifact store under one agent_id directory (used by mobile_gui and any type sharing this layout)."""
+    """JSON artifact store under one expert_id directory (used by mobile_gui and any type sharing this layout)."""
 
     def __init__(self, root: Path) -> None:
         self.root = root

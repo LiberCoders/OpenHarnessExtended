@@ -390,10 +390,10 @@ def _async_agent_task_entries(tool_metadata: dict[str, object] | None) -> list[d
 
 
 def _build_terminal_notice(entry: dict[str, object]) -> str:
-    agent_id = str(entry.get("agent_id") or entry.get("task_id") or "").strip() or "unknown"
+    expert_or_agent_id = str(entry.get("expert_id") or entry.get("agent_id") or entry.get("task_id") or "").strip() or "unknown"
     status = str(entry.get("status") or "unknown").strip() or "unknown"
     return_code = entry.get("return_code")
-    details = [f"{agent_id} finished with status={status}"]
+    details = [f"{expert_or_agent_id} finished with status={status}"]
     if isinstance(return_code, int):
         details.append(f"exit_code={return_code}")
     last_message = str(entry.get("last_message") or "").strip()
@@ -421,9 +421,9 @@ def _refresh_async_agent_queue_state(tool_metadata: dict[str, object] | None) ->
         source_tool = str(entry.get("source_tool") or "").strip()
         terminal_update = False
 
-        if source_tool == "spawn_agent":
-            agent_id = str(entry.get("agent_id") or task_id).strip()
-            handle = channel_registry.get_by_agent_id(agent_id)
+        if source_tool == "delegate_to_expert":
+            expert_id = str(entry.get("expert_id") or entry.get("agent_id") or task_id).strip()
+            handle = channel_registry.get_by_expert_id(expert_id)
             if handle is None:
                 entry["status"] = "missing"
                 entry["is_running"] = False
@@ -528,9 +528,9 @@ async def _shutdown_async_agents(tool_metadata: dict[str, object] | None) -> Non
         task_id = str(entry.get("task_id") or "").strip()
         if not task_id:
             continue
-        if str(entry.get("source_tool") or "").strip() == "spawn_agent":
-            agent_id = str(entry.get("agent_id") or task_id).strip()
-            handle = channel_registry.get_by_agent_id(agent_id)
+        if str(entry.get("source_tool") or "").strip() == "delegate_to_expert":
+            expert_id = str(entry.get("expert_id") or entry.get("agent_id") or task_id).strip()
+            handle = channel_registry.get_by_expert_id(expert_id)
             if handle is None:
                 continue
             channel_registry.refresh(handle)

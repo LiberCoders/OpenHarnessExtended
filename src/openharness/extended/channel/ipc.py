@@ -130,10 +130,10 @@ class WorkerQueueChannel:
         return None
 
 
-def create_channel(agent_id: str) -> LeaderQueueChannel:
+def create_channel(expert_id: str) -> LeaderQueueChannel:
     """Create leader-side queue channel."""
     if os.name == "nt":
-        channel_root = get_data_dir() / "extended" / "channels" / str(agent_id)
+        channel_root = get_data_dir() / "extended" / "channels" / str(expert_id)
         channel_root.mkdir(parents=True, exist_ok=True)
         downlink = str((channel_root / "downlink.jsonl").resolve())
         uplink = str((channel_root / "uplink.jsonl").resolve())

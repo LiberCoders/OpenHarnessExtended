@@ -1,2 +1,2 @@
-"""Tools for heterogeneous agent orchestration."""
+"""Tools for expert orchestration."""
 

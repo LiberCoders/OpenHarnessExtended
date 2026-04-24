@@ -1,4 +1,4 @@
-"""Tests for minimal heterogeneous agent tools."""
+"""Tests for minimal expert tools."""
 
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from openharness.extended.channel import AgentHandle, connect_worker_channel, create_channel, get_channel_registry
-from openharness.extended.tools.query_agent_status_tool import (
-    QueryAgentStatusTool,
-    QueryAgentStatusToolInput,
+from openharness.extended.channel import ExpertHandle, connect_worker_channel, create_channel, get_channel_registry
+from openharness.extended.tools.get_expert_status_tool import (
+    GetExpertStatusTool,
+    GetExpertStatusToolInput,
 )
-from openharness.extended.tools.send_to_agent_tool import SendToAgentTool, SendToAgentToolInput
-from openharness.extended.tools.spawn_agent_tool import (
+from openharness.extended.tools.send_to_expert_tool import SendToExpertTool, SendToExpertToolInput
+from openharness.extended.tools.delegate_to_expert_tool import (
+    DelegateToExpertTool,
+    DelegateToExpertToolInput,
     OPENHARNESS_PARENT_SETTINGS_KEY,
-    SpawnAgentTool,
-    SpawnAgentToolInput,
 )
 from openharness.tools.base import ToolExecutionContext
 
@@ -60,7 +60,7 @@ class _FakeSettings:
 
 
 @pytest.mark.asyncio
-async def test_spawn_agent_registers_handle_and_returns_ids(tmp_path: Path, monkeypatch):
+async def test_delegate_to_expert_registers_handle_and_returns_ids(tmp_path: Path, monkeypatch):
     class _FakeProcess:
         pid = 43210
         exitcode = None
@@ -69,31 +69,31 @@ async def test_spawn_agent_registers_handle_and_returns_ids(tmp_path: Path, monk
             return True
 
     monkeypatch.setattr(
-        SpawnAgentTool,
+        DelegateToExpertTool,
         "_spawn_worker",
         lambda self, config, channel: (_emit_startup_heartbeat(channel), _FakeProcess())[1],
     )
     monkeypatch.setattr(
-        "openharness.extended.tools.spawn_agent_tool.load_settings",
+        "openharness.extended.tools.delegate_to_expert_tool.load_settings",
         lambda: _FakeSettings(),
     )
     monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("OPENHARNESS_LOGS_DIR", str(tmp_path / "logs"))
 
-    tool = SpawnAgentTool()
+    tool = DelegateToExpertTool()
     result = await tool.execute(
-        SpawnAgentToolInput(agent_type="mobile_gui", task="打开设置"),
+        DelegateToExpertToolInput(expert_type="mobile_gui", task="打开设置"),
         ToolExecutionContext(cwd=tmp_path),
     )
     assert result.is_error is False
-    assert "agent_id=mobile_gui_" in result.output
+    assert "expert_id=mobile_gui_" in result.output
     assert "task_id=mobile_gui_" in result.output
     assert "pid=43210" in result.output
 
 
 @pytest.mark.asyncio
-async def test_spawn_agent_inherits_parent_runtime_settings(tmp_path: Path, monkeypatch):
+async def test_delegate_to_expert_inherits_parent_runtime_settings(tmp_path: Path, monkeypatch):
     captured_config: dict[str, object] = {}
 
     class _FakeProcess:
@@ -108,18 +108,18 @@ async def test_spawn_agent_inherits_parent_runtime_settings(tmp_path: Path, monk
         _emit_startup_heartbeat(channel)
         return _FakeProcess()
 
-    monkeypatch.setattr(SpawnAgentTool, "_spawn_worker", _fake_spawn)
+    monkeypatch.setattr(DelegateToExpertTool, "_spawn_worker", _fake_spawn)
     monkeypatch.setattr(
-        "openharness.extended.tools.spawn_agent_tool.load_settings",
+        "openharness.extended.tools.delegate_to_expert_tool.load_settings",
         lambda: _FakeSettings(),
     )
     monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("OPENHARNESS_LOGS_DIR", str(tmp_path / "logs"))
 
-    tool = SpawnAgentTool()
+    tool = DelegateToExpertTool()
     result = await tool.execute(
-        SpawnAgentToolInput(agent_type="mobile_gui", task="打开应用市场"),
+        DelegateToExpertToolInput(expert_type="mobile_gui", task="打开应用市场"),
         ToolExecutionContext(cwd=tmp_path),
     )
     assert result.is_error is False
@@ -140,7 +140,7 @@ async def test_spawn_agent_inherits_parent_runtime_settings(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
-async def test_spawn_agent_keeps_explicit_runtime_overrides(tmp_path: Path, monkeypatch):
+async def test_delegate_to_expert_keeps_explicit_runtime_overrides(tmp_path: Path, monkeypatch):
     captured_config: dict[str, object] = {}
 
     class _FakeProcess:
@@ -155,19 +155,19 @@ async def test_spawn_agent_keeps_explicit_runtime_overrides(tmp_path: Path, monk
         _emit_startup_heartbeat(channel)
         return _FakeProcess()
 
-    monkeypatch.setattr(SpawnAgentTool, "_spawn_worker", _fake_spawn)
+    monkeypatch.setattr(DelegateToExpertTool, "_spawn_worker", _fake_spawn)
     monkeypatch.setattr(
-        "openharness.extended.tools.spawn_agent_tool.load_settings",
+        "openharness.extended.tools.delegate_to_expert_tool.load_settings",
         lambda: _FakeSettings(),
     )
     monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("OPENHARNESS_LOGS_DIR", str(tmp_path / "logs"))
 
-    tool = SpawnAgentTool()
+    tool = DelegateToExpertTool()
     result = await tool.execute(
-        SpawnAgentToolInput(
-            agent_type="mobile_gui",
+        DelegateToExpertToolInput(
+            expert_type="mobile_gui",
             task="打开应用市场",
             runtime_overrides={"gui_backend": {"type": "gui_plus", "model": "gui-plus-2026-02-26"}},
         ),
@@ -195,9 +195,9 @@ async def test_query_and_send_tools_use_channel_registry(tmp_path: Path, monkeyp
             return True
 
     registry.register(
-        AgentHandle(
-            agent_id="mobile_gui_test",
-            agent_type="mobile_gui",
+        ExpertHandle(
+            expert_id="mobile_gui_test",
+            expert_type="mobile_gui",
             task_id="b7654321",
             channel=channel,
             process=_FakeProcess(),
@@ -205,9 +205,9 @@ async def test_query_and_send_tools_use_channel_registry(tmp_path: Path, monkeyp
         )
     )
 
-    send_tool = SendToAgentTool()
+    send_tool = SendToExpertTool()
     send_result = await send_tool.execute(
-        SendToAgentToolInput(agent_id="mobile_gui_test", message_type="instruction_append", text="继续"),
+        SendToExpertToolInput(expert_id="mobile_gui_test", message_type="instruction_append", text="继续"),
         ToolExecutionContext(cwd=tmp_path),
     )
     assert send_result.is_error is False
@@ -227,9 +227,9 @@ async def test_query_and_send_tools_use_channel_registry(tmp_path: Path, monkeyp
         },
     )
     await asyncio.sleep(0.05)
-    query_tool = QueryAgentStatusTool()
+    query_tool = GetExpertStatusTool()
     query_result = await query_tool.execute(
-        QueryAgentStatusToolInput(agent_id="mobile_gui_test"),
+        GetExpertStatusToolInput(expert_id="mobile_gui_test"),
         ToolExecutionContext(cwd=tmp_path),
     )
     assert query_result.is_error is False

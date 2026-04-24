@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from openharness.extended.agents.mobile_gui.backends.base import GuiInferenceBackend
-from openharness.extended.agents.mobile_gui.backends.gui_plus_backend import GuiPlusBackend
+from openharness.extended.experts.mobile_gui.backends.base import GuiInferenceBackend
+from openharness.extended.experts.mobile_gui.backends.gui_plus_backend import GuiPlusBackend
 
 
 def resolve_gui_backend(

@@ -255,17 +255,17 @@ def _remember_async_agent_activity(
         summary = f"Spawned async agent. {description}".strip()
         if output.strip():
             summary = f"{summary} [{output.strip()[:180]}]".strip()
-    elif tool_name == "spawn_agent":
+    elif tool_name == "delegate_to_expert":
         description = str(tool_input.get("task") or "").strip()
-        summary = f"Spawned heterogeneous agent. {description}".strip()
+        summary = f"Delegated expert. {description}".strip()
         if output.strip():
             summary = f"{summary} [{output.strip()[:180]}]".strip()
     elif tool_name == "send_message":
         target = str(tool_input.get("task_id") or "").strip()
         summary = f"Sent follow-up message to async agent {target}".strip()
-    elif tool_name == "send_to_agent":
-        target = str(tool_input.get("agent_id") or "").strip()
-        summary = f"Sent control message to heterogeneous agent {target}".strip()
+    elif tool_name == "send_to_expert":
+        target = str(tool_input.get("expert_id") or "").strip()
+        summary = f"Sent control message to expert {target}".strip()
     else:
         summary = output.strip()[:220] or f"Async agent activity via {tool_name}"
     bucket.append(summary)
@@ -278,11 +278,11 @@ def _parse_spawned_agent_identity(
     metadata: dict[str, object] | None = None,
 ) -> tuple[str, str] | None:
     if isinstance(metadata, dict):
-        agent_id = str(metadata.get("agent_id") or "").strip()
+        agent_id = str(metadata.get("expert_id") or metadata.get("agent_id") or "").strip()
         task_id = str(metadata.get("task_id") or "").strip()
         if agent_id and task_id:
             return agent_id, task_id
-    match = re.search(r"Spawned agent (.+?) \(task_id=(\S+?)(?:[,)]|$)", output.strip())
+    match = re.search(r"(?:Delegated expert|Spawned agent) (.+?) \((?:expert_id=\S+,\s*)?task_id=(\S+?)(?:[,)]|$)", output.strip())
     if match is None:
         return None
     return match.group(1).strip(), match.group(2).strip()
@@ -296,12 +296,12 @@ def _remember_async_agent_task(
     output: str,
     result_metadata: dict[str, object] | None = None,
 ) -> None:
-    if tool_name not in {"agent", "spawn_agent"}:
+    if tool_name not in {"agent", "delegate_to_expert"}:
         return
     identity = _parse_spawned_agent_identity(output, result_metadata)
     if identity is None:
         return
-    agent_id, task_id = identity
+    expert_id, task_id = identity
     bucket = _tool_metadata_bucket(tool_metadata, "async_agent_tasks")
     description = str(
         tool_input.get("description")
@@ -310,7 +310,8 @@ def _remember_async_agent_task(
         or ""
     ).strip()
     entry = {
-        "agent_id": agent_id,
+        "expert_id": expert_id,
+        "agent_id": expert_id,
         "task_id": task_id,
         "description": description[:240],
         "status": "spawned",
@@ -389,7 +390,7 @@ def _record_tool_carryover(
         if skill_name:
             _remember_active_artifact(context.tool_metadata, f"skill:{skill_name}")
             _remember_verified_work(context.tool_metadata, f"Loaded skill {skill_name}")
-    elif tool_name in {"agent", "send_message", "spawn_agent", "send_to_agent"}:
+    elif tool_name in {"agent", "send_message", "delegate_to_expert", "send_to_expert"}:
         _remember_async_agent_activity(
             context.tool_metadata,
             tool_name=tool_name,
@@ -459,7 +460,7 @@ def _record_tool_carryover(
             context.tool_metadata,
             entry=f"Loaded skill {str(tool_input.get('name') or '').strip()}",
         )
-    elif tool_name in {"agent", "send_message", "spawn_agent", "send_to_agent"}:
+    elif tool_name in {"agent", "send_message", "delegate_to_expert", "send_to_expert"}:
         _remember_work_log(
             context.tool_metadata,
             entry=f"Async agent action via {tool_name}",

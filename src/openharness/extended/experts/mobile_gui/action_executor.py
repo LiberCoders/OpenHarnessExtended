@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from openharness.extended.agents.mobile_gui.context import MobileGuiContext
-from openharness.extended.agents.mobile_gui.device.hdc import DeviceActionResult, HdcMobileDeviceDriver
-from openharness.extended.agents.mobile_gui.types import GuiAction
+from openharness.extended.experts.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.device.hdc import DeviceActionResult, HdcMobileDeviceDriver
+from openharness.extended.experts.mobile_gui.types import GuiAction
 
 
 class ActionExecutor:

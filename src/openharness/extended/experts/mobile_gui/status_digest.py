@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openharness.extended.agents.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.context import MobileGuiContext
 
 
 def build_status_digest(context: MobileGuiContext, *, status: str) -> dict[str, str]:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from openharness.extended.agents.mobile_gui.backends.base import GuiInferenceBackend
-from openharness.extended.agents.mobile_gui.context import MobileGuiContext
-from openharness.extended.agents.mobile_gui.types import Observation, ReasoningOutcome
+from openharness.extended.experts.mobile_gui.backends.base import GuiInferenceBackend
+from openharness.extended.experts.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.types import Observation, ReasoningOutcome
 
 
 class MobileGuiReasoning:

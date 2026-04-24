@@ -1,2 +1,2 @@
-"""Extended runtime components for heterogeneous agents."""
+"""Extended runtime components for experts."""
 

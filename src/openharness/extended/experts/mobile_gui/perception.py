@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.extended.agents.mobile_gui.context import MobileGuiContext
-from openharness.extended.agents.mobile_gui.device.hdc import HdcMobileDeviceDriver
-from openharness.extended.agents.mobile_gui.types import Observation
+from openharness.extended.experts.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.device.hdc import HdcMobileDeviceDriver
+from openharness.extended.experts.mobile_gui.types import Observation
 
 
 class MobilePerception:

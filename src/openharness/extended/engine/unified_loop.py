@@ -1,4 +1,4 @@
-"""Heterogeneous agent workers: shared step loop + pack built per agent_type."""
+"""Expert workers: shared step loop + pack built per expert_type."""
 
 from __future__ import annotations
 
@@ -12,37 +12,37 @@ from typing import Any
 from uuid import uuid4
 
 from openharness.config.paths import get_data_dir
-from openharness.extended.agents.mobile_gui.action_executor import ActionExecutor
-from openharness.extended.agents.mobile_gui.backends.registry import resolve_gui_backend
-from openharness.extended.agents.mobile_gui.context import MobileGuiContext
-from openharness.extended.agents.mobile_gui.device.hdc import HdcMobileDeviceDriver
-from openharness.extended.agents.mobile_gui.perception import MobilePerception
-from openharness.extended.agents.mobile_gui.reasoning import MobileGuiReasoning
-from openharness.extended.agents.mobile_gui.state_store import MobileGuiStateStore
-from openharness.extended.agents.mobile_gui.status_digest import build_status_digest
-from openharness.extended.agents.mobile_gui.types import GuiAction
+from openharness.extended.experts.mobile_gui.action_executor import ActionExecutor
+from openharness.extended.experts.mobile_gui.backends.registry import resolve_gui_backend
+from openharness.extended.experts.mobile_gui.context import MobileGuiContext
+from openharness.extended.experts.mobile_gui.device.hdc import HdcMobileDeviceDriver
+from openharness.extended.experts.mobile_gui.perception import MobilePerception
+from openharness.extended.experts.mobile_gui.reasoning import MobileGuiReasoning
+from openharness.extended.experts.mobile_gui.state_store import MobileGuiStateStore
+from openharness.extended.experts.mobile_gui.status_digest import build_status_digest
+from openharness.extended.experts.mobile_gui.types import GuiAction
 from openharness.extended.channel import connect_worker_channel
 from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_AGENT_TYPE_SLUG = "unspecified"
+FALLBACK_EXPERT_TYPE_SLUG = "unspecified"
 
-WORKER_IMPLEMENTED_AGENT_TYPES: frozenset[str] = frozenset({"mobile_gui"})
+WORKER_IMPLEMENTED_EXPERT_TYPES: frozenset[str] = frozenset({"mobile_gui"})
 
 
-def _default_capability_profile(agent_type: str) -> str:
-    if agent_type == "mobile_gui":
+def _default_capability_profile(expert_type: str) -> str:
+    if expert_type == "mobile_gui":
         return "hdc_minimal_v1"
     return "default"
 
 
 @dataclass
-class HeterogeneousAgentRunConfig:
-    """Spawned heterogeneous worker: common fields for all agent_type values."""
+class ExpertRunConfig:
+    """Spawned expert worker: common fields for all expert_type values."""
 
-    agent_type: str
-    agent_id: str
+    expert_type: str
+    expert_id: str
     task: str
     capability_profile: str
     max_steps: int
@@ -51,13 +51,13 @@ class HeterogeneousAgentRunConfig:
     runtime_overrides: dict
 
     @classmethod
-    def from_worker_dict(cls, raw: dict[str, Any], *, agent_type: str) -> HeterogeneousAgentRunConfig:
+    def from_worker_dict(cls, raw: dict[str, Any], *, expert_type: str) -> ExpertRunConfig:
         cap = str(raw.get("capability_profile") or "").strip()
         if not cap:
-            cap = _default_capability_profile(agent_type)
+            cap = _default_capability_profile(expert_type)
         return cls(
-            agent_type=agent_type,
-            agent_id=str(raw.get("agent_id") or ""),
+            expert_type=expert_type,
+            expert_id=str(raw.get("expert_id") or ""),
             task=str(raw.get("task") or ""),
             capability_profile=cap,
             max_steps=int(raw.get("max_steps") or 8),
@@ -67,18 +67,18 @@ class HeterogeneousAgentRunConfig:
         )
 
 
-def _resolve_agent_id(config: HeterogeneousAgentRunConfig) -> str:
+def _resolve_expert_id(config: ExpertRunConfig) -> str:
     fallback_ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    type_slug = (config.agent_type or "").strip() or FALLBACK_AGENT_TYPE_SLUG
-    return config.agent_id or f"{type_slug}_{fallback_ts}_{uuid4().hex[:6]}"
+    type_slug = (config.expert_type or "").strip() or FALLBACK_EXPERT_TYPE_SLUG
+    return config.expert_id or f"{type_slug}_{fallback_ts}_{uuid4().hex[:6]}"
 
 
 @dataclass
-class HeterogeneousAgentLoopPack:
+class ExpertLoopPack:
     """Everything the shared perceive→think→act step loop needs for one worker run."""
 
-    config: HeterogeneousAgentRunConfig
-    agent_id: str
+    config: ExpertRunConfig
+    expert_id: str
     store: MobileGuiStateStore
     context: Any
     perception: Any
@@ -90,7 +90,7 @@ class HeterogeneousAgentLoopPack:
         """Generic max_steps loop: downlink, observe, think, act, persist, status uplink."""
         cfg = self.config
         status = "running"
-        logger.info("%s loop start: agent_id=%s max_steps=%s", cfg.agent_type, self.agent_id, cfg.max_steps)
+        logger.info("%s loop start: expert_id=%s max_steps=%s", cfg.expert_type, self.expert_id, cfg.max_steps)
 
         for step in range(1, max(1, cfg.max_steps) + 1):
             self.context.step = step
@@ -125,9 +125,9 @@ class HeterogeneousAgentLoopPack:
             }
             self.store.save_step(step, step_payload)
             logger.info(
-                "%s step done: agent_id=%s step=%s action=%s message=%s",
-                cfg.agent_type,
-                self.agent_id,
+                "%s step done: expert_id=%s step=%s action=%s message=%s",
+                cfg.expert_type,
+                self.expert_id,
                 step,
                 self.context.last_action,
                 self.context.last_message,
@@ -142,23 +142,23 @@ class HeterogeneousAgentLoopPack:
         return status
 
 
-def build_heterogeneous_loop_pack(
-    config: HeterogeneousAgentRunConfig,
+def build_expert_loop_pack(
+    config: ExpertRunConfig,
     *,
-    agent_id: str,
+    expert_id: str,
     bundle: Any,
-) -> HeterogeneousAgentLoopPack:
-    """Assemble store, context, and per–agent_type drivers in one place."""
-    root = get_data_dir() / "extended" / "agents" / agent_id
+) -> ExpertLoopPack:
+    """Assemble store, context, and per–expert_type drivers in one place."""
+    root = get_data_dir() / "extended" / "experts" / expert_id
     runtime_overrides = config.runtime_overrides or {}
 
-    if config.agent_type == "mobile_gui":
+    if config.expert_type == "mobile_gui":
         store = MobileGuiStateStore(root)
         context = MobileGuiContext(task=config.task)
         driver = HdcMobileDeviceDriver(cwd=Path(config.cwd or ".").resolve(), serial=config.device_serial)
         perception = MobilePerception(driver=driver, steps_dir=store.steps_dir)
         settings = bundle.current_settings()
-        type_section = getattr(settings, config.agent_type, None) if settings is not None else None
+        type_section = getattr(settings, config.expert_type, None) if settings is not None else None
         gui_backend_config = runtime_overrides.get("gui_backend")
         if gui_backend_config is None and isinstance(type_section, dict):
             gui_backend_config = type_section.get("gui_backend")
@@ -168,9 +168,9 @@ def build_heterogeneous_loop_pack(
         )
         reasoning = MobileGuiReasoning(backend)
         executor = ActionExecutor(driver=driver)
-        return HeterogeneousAgentLoopPack(
+        return ExpertLoopPack(
             config=config,
-            agent_id=agent_id,
+            expert_id=expert_id,
             store=store,
             context=context,
             perception=perception,
@@ -179,23 +179,23 @@ def build_heterogeneous_loop_pack(
             backend=backend,
         )
 
-    raise RuntimeError(f"no loop pack builder for agent_type={config.agent_type!r}")
+    raise RuntimeError(f"no loop pack builder for expert_type={config.expert_type!r}")
 
 
-async def _run_heterogeneous_agent_loop(config: HeterogeneousAgentRunConfig, channel) -> int:
+async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
     """Harness runtime, then one pack + shared step runner."""
-    agent_id = _resolve_agent_id(config)
+    expert_id = _resolve_expert_id(config)
     bundle = None
-    pack: HeterogeneousAgentLoopPack | None = None
+    pack: ExpertLoopPack | None = None
     status = "running"
     try:
-        if config.agent_type not in WORKER_IMPLEMENTED_AGENT_TYPES:
-            raise RuntimeError(f"worker loop not implemented for agent_type={config.agent_type!r}")
+        if config.expert_type not in WORKER_IMPLEMENTED_EXPERT_TYPES:
+            raise RuntimeError(f"worker loop not implemented for expert_type={config.expert_type!r}")
 
-        logger.info("%s worker init: agent_id=%s task=%s", config.agent_type, agent_id, config.task)
+        logger.info("%s worker init: expert_id=%s task=%s", config.expert_type, expert_id, config.task)
 
         runtime_overrides = config.runtime_overrides or {}
-        logger.info("%s build_runtime start: agent_id=%s", config.agent_type, agent_id)
+        logger.info("%s build_runtime start: expert_id=%s", config.expert_type, expert_id)
         bundle = await build_runtime(
             cwd=config.cwd,
             model=runtime_overrides.get("model"),
@@ -207,16 +207,16 @@ async def _run_heterogeneous_agent_loop(config: HeterogeneousAgentRunConfig, cha
             active_profile=runtime_overrides.get("active_profile"),
             permission_mode=runtime_overrides.get("permission_mode"),
         )
-        logger.info("%s build_runtime done: agent_id=%s", config.agent_type, agent_id)
-        logger.info("%s start_runtime start: agent_id=%s", config.agent_type, agent_id)
+        logger.info("%s build_runtime done: expert_id=%s", config.expert_type, expert_id)
+        logger.info("%s start_runtime start: expert_id=%s", config.expert_type, expert_id)
         await start_runtime(bundle)
-        logger.info("%s start_runtime done: agent_id=%s", config.agent_type, agent_id)
+        logger.info("%s start_runtime done: expert_id=%s", config.expert_type, expert_id)
 
-        pack = build_heterogeneous_loop_pack(config, agent_id=agent_id, bundle=bundle)
+        pack = build_expert_loop_pack(config, expert_id=expert_id, bundle=bundle)
         pack.store.save_meta(
             {
-                "agent_id": agent_id,
-                "agent_type": config.agent_type,
+                "expert_id": expert_id,
+                "expert_type": config.expert_type,
                 "task": config.task,
                 "capability_profile": config.capability_profile,
                 "runtime_overrides": config.runtime_overrides,
@@ -239,19 +239,19 @@ async def _run_heterogeneous_agent_loop(config: HeterogeneousAgentRunConfig, cha
                 )
             pack.context.last_message = message
         logger.exception(
-            "%s worker failed: agent_id=%s error=%s",
-            config.agent_type,
-            agent_id,
+            "%s worker failed: expert_id=%s error=%s",
+            config.expert_type,
+            expert_id,
             str(exc).strip() or type(exc).__name__,
         )
     finally:
-        logger.info("%s worker finalize: agent_id=%s status=%s", config.agent_type, agent_id, status)
+        logger.info("%s worker finalize: expert_id=%s status=%s", config.expert_type, expert_id, status)
         ctx = pack.context if pack is not None else None
         st = pack.store if pack is not None else None
         if st is not None:
             st.save_result(
                 {
-                    "agent_id": agent_id,
+                    "expert_id": expert_id,
                     "status": status,
                     "last_action": getattr(ctx, "last_action", "") if ctx else "",
                     "message": getattr(ctx, "last_message", "") if ctx else "",
@@ -281,8 +281,8 @@ async def _run_heterogeneous_agent_loop(config: HeterogeneousAgentRunConfig, cha
     return 0 if status in {"completed", "killed"} else 1
 
 
-def run_heterogeneous_worker_entry(config: dict, downlink_queue, uplink_queue) -> None:
-    """Multiprocessing/subprocess entry: validate agent_type and run the shared heterogeneous loop."""
+def run_expert_worker_entry(config: dict, downlink_queue, uplink_queue) -> None:
+    """Multiprocessing/subprocess entry: validate expert_type and run the shared expert loop."""
     env_overrides = config.get("env_overrides")
     if isinstance(env_overrides, dict):
         for key in ("OPENHARNESS_CONFIG_DIR", "OPENHARNESS_DATA_DIR", "OPENHARNESS_LOGS_DIR"):
@@ -293,16 +293,16 @@ def run_heterogeneous_worker_entry(config: dict, downlink_queue, uplink_queue) -
         downlink_queue=downlink_queue,
         uplink_queue=uplink_queue,
     )
-    agent_type = str(config.get("agent_type") or "").strip()
-    if not agent_type:
-        logger.error("heterogeneous worker: missing config['agent_type']")
+    expert_type = str(config.get("expert_type") or "").strip()
+    if not expert_type:
+        logger.error("expert worker: missing config['expert_type']")
         raise SystemExit(2)
-    if agent_type not in WORKER_IMPLEMENTED_AGENT_TYPES:
-        logger.error("heterogeneous worker: unsupported agent_type=%r", agent_type)
+    if expert_type not in WORKER_IMPLEMENTED_EXPERT_TYPES:
+        logger.error("expert worker: unsupported expert_type=%r", expert_type)
         raise SystemExit(2)
 
-    parsed = HeterogeneousAgentRunConfig.from_worker_dict(config, agent_type=agent_type)
-    exit_code = asyncio.run(_run_heterogeneous_agent_loop(parsed, worker_channel))
+    parsed = ExpertRunConfig.from_worker_dict(config, expert_type=expert_type)
+    exit_code = asyncio.run(_run_expert_loop(parsed, worker_channel))
     raise SystemExit(exit_code)
 
 

@@ -15,7 +15,7 @@ from openharness.config.paths import get_data_dir
 from openharness.extended.experts.mobile_gui.action_executor import ActionExecutor
 from openharness.extended.experts.mobile_gui.backends.registry import resolve_gui_backend
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
-from openharness.extended.experts.mobile_gui.device.hdc import HdcMobileDeviceDriver
+from openharness.extended.experts.mobile_gui.device import create_mobile_driver
 from openharness.extended.experts.mobile_gui.perception import MobilePerception
 from openharness.extended.experts.mobile_gui.reasoning import MobileGuiReasoning
 from openharness.extended.experts.mobile_gui.state_store import MobileGuiStateStore
@@ -35,6 +35,29 @@ def _default_capability_profile(expert_type: str) -> str:
     if expert_type == "mobile_gui":
         return "hdc_minimal_v1"
     return "default"
+
+
+# Must match OPENHARNESS_PARENT_SETTINGS_KEY in delegate_to_expert_tool (avoid import cycle).
+_OPENHARNESS_PARENT_SETTINGS_SNAPSHOT = "openharness_parent_settings"
+
+
+def _merge_mobile_gui_section(
+    runtime_overrides: dict[str, Any],
+    settings_expert_section: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge `mobile_gui` from parent snapshot, settings, and spawn-time overrides (later wins)."""
+    merged: dict[str, Any] = {}
+    snap = runtime_overrides.get(_OPENHARNESS_PARENT_SETTINGS_SNAPSHOT)
+    if isinstance(snap, dict):
+        parent_mg = snap.get("mobile_gui")
+        if isinstance(parent_mg, dict):
+            merged.update(parent_mg)
+    if isinstance(settings_expert_section, dict):
+        merged.update(settings_expert_section)
+    ro_mg = runtime_overrides.get("mobile_gui")
+    if isinstance(ro_mg, dict):
+        merged.update(ro_mg)
+    return merged
 
 
 @dataclass
@@ -119,6 +142,7 @@ class ExpertLoopPack:
                 "message": self.context.last_message,
                 "screenshot_path": self.context.last_screenshot,
                 "raw_response": outcome.raw_response,
+                "reasoning_content": outcome.reasoning_content,
                 "parsed_action": _action_to_dict(outcome.parsed_action),
                 "adapted_action": _action_to_dict(outcome.adapted_action),
                 "model_request": _truncate_model_request(outcome.model_request),
@@ -155,13 +179,26 @@ def build_expert_loop_pack(
     if config.expert_type == "mobile_gui":
         store = MobileGuiStateStore(root)
         context = MobileGuiContext(task=config.task)
-        driver = HdcMobileDeviceDriver(cwd=Path(config.cwd or ".").resolve(), serial=config.device_serial)
-        perception = MobilePerception(driver=driver, steps_dir=store.steps_dir)
+        cwd = Path(config.cwd or ".").resolve()
         settings = bundle.current_settings()
         type_section = getattr(settings, config.expert_type, None) if settings is not None else None
+        mobile_gui_opts = _merge_mobile_gui_section(
+            runtime_overrides,
+            type_section if isinstance(type_section, dict) else None,
+        )
+        transport = str(mobile_gui_opts.get("device_transport") or "").strip().lower()
+        driver = create_mobile_driver(
+            transport=transport,
+            cwd=cwd,
+            serial=config.device_serial,
+            options=mobile_gui_opts,
+        )
+        perception = MobilePerception(driver=driver, steps_dir=store.steps_dir)
         gui_backend_config = runtime_overrides.get("gui_backend")
         if gui_backend_config is None and isinstance(type_section, dict):
             gui_backend_config = type_section.get("gui_backend")
+        if gui_backend_config is None:
+            gui_backend_config = mobile_gui_opts.get("gui_backend")
         gui_cfg = gui_backend_config if isinstance(gui_backend_config, dict) else None
         backend = resolve_gui_backend(
             gui_backend_config=gui_cfg,
@@ -311,9 +348,13 @@ def _action_to_dict(action: GuiAction) -> dict:
         "action": action.action,
         "x": action.x,
         "y": action.y,
+        "x2": action.x2,
+        "y2": action.y2,
         "seconds": action.seconds,
         "status": action.status,
         "message": action.message,
+        "text": action.text,
+        "keycode": action.keycode,
     }
 
 

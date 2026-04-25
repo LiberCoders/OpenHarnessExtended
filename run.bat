@@ -9,6 +9,8 @@ set "CONDA_ENV_NAME=py310"
 
 REM Use project-local config dir.
 set "OPENHARNESS_CONFIG_DIR=%CD%\build\wksp"
+REM Source settings file name under OPENHARNESS_CONFIG_DIR (copied to settings.json before launch).
+set "OPENHARNESS_SETTINGS_SOURCE_FILE=settings_debug.json"
 set "OPENHARNESS_DATA_DIR=%OPENHARNESS_CONFIG_DIR%\data"
 set "OPENHARNESS_LOGS_DIR=%OPENHARNESS_CONFIG_DIR%\logs"
 
@@ -23,12 +25,12 @@ if not exist "%OPENHARNESS_LOGS_DIR%" (
 )
 
 REM OpenHarness reads settings.json from OPENHARNESS_CONFIG_DIR.
-if not exist "%OPENHARNESS_CONFIG_DIR%\setting_debug.json" (
-  echo [ERROR] Missing "%OPENHARNESS_CONFIG_DIR%\setting_debug.json"
+if not exist "%OPENHARNESS_CONFIG_DIR%\%OPENHARNESS_SETTINGS_SOURCE_FILE%" (
+  echo [ERROR] Missing "%OPENHARNESS_CONFIG_DIR%\%OPENHARNESS_SETTINGS_SOURCE_FILE%"
   echo Please create it first or copy from template.
   exit /b 1
 )
-copy /Y "%OPENHARNESS_CONFIG_DIR%\setting_debug.json" "%OPENHARNESS_CONFIG_DIR%\settings.json" >nul
+copy /Y "%OPENHARNESS_CONFIG_DIR%\%OPENHARNESS_SETTINGS_SOURCE_FILE%" "%OPENHARNESS_CONFIG_DIR%\settings.json" >nul
 
 REM Require conda env. Exit immediately on failure.
 where conda >nul 2>nul

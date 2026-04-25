@@ -29,11 +29,9 @@ class GetExpertStatusTool(BaseTool):
     input_model = GetExpertStatusToolInput
 
     def is_read_only(self, arguments: GetExpertStatusToolInput) -> bool:
-        del arguments
         return True
 
     async def execute(self, arguments: GetExpertStatusToolInput, context: ToolExecutionContext) -> ToolResult:
-        del context
         registry = get_channel_registry()
         handle = None
         if arguments.expert_id:

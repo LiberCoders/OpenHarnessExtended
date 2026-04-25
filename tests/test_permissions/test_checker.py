@@ -6,7 +6,10 @@ import pytest
 
 from openharness.config.settings import PathRuleConfig, PermissionSettings
 from openharness.permissions import PermissionChecker, PermissionMode
-from openharness.permissions.checker import SENSITIVE_PATH_PATTERNS
+from openharness.permissions.checker import (
+    EXPERT_DELEGATION_TOOLS_NO_PROMPT,
+    SENSITIVE_PATH_PATTERNS,
+)
 
 
 def test_default_mode_allows_read_only():
@@ -22,6 +25,44 @@ def test_default_mode_requires_confirmation_for_mutation():
     assert decision.allowed is False
     assert decision.requires_confirmation is True
     assert "/permissions full_auto" in decision.reason
+
+
+@pytest.mark.parametrize("tool_name", sorted(EXPERT_DELEGATION_TOOLS_NO_PROMPT))
+def test_default_mode_allows_expert_delegation_without_confirmation(tool_name: str):
+    checker = PermissionChecker(PermissionSettings(mode=PermissionMode.DEFAULT))
+    decision = checker.evaluate(tool_name, is_read_only=False)
+    assert decision.allowed is True
+    assert decision.requires_confirmation is False
+
+
+@pytest.mark.parametrize("tool_name", sorted(EXPERT_DELEGATION_TOOLS_NO_PROMPT))
+def test_plan_mode_still_blocks_expert_delegation(tool_name: str):
+    checker = PermissionChecker(PermissionSettings(mode=PermissionMode.PLAN))
+    decision = checker.evaluate(tool_name, is_read_only=False)
+    assert decision.allowed is False
+    assert "plan mode" in decision.reason
+
+
+def test_denied_tools_blocks_delegate_to_expert():
+    checker = PermissionChecker(
+        PermissionSettings(mode=PermissionMode.DEFAULT, denied_tools=["delegate_to_expert"])
+    )
+    decision = checker.evaluate("delegate_to_expert", is_read_only=False)
+    assert decision.allowed is False
+
+
+def test_get_expert_status_allowed_without_confirmation_via_read_only_branch():
+    """Engine passes is_read_only=True from GetExpertStatusTool; no extra allowlist entry needed."""
+    checker = PermissionChecker(PermissionSettings(mode=PermissionMode.DEFAULT))
+    decision = checker.evaluate("get_expert_status", is_read_only=True)
+    assert decision.allowed is True
+    assert decision.requires_confirmation is False
+
+
+def test_get_expert_status_still_allowed_in_plan_mode():
+    checker = PermissionChecker(PermissionSettings(mode=PermissionMode.PLAN))
+    decision = checker.evaluate("get_expert_status", is_read_only=True)
+    assert decision.allowed is True
 
 
 def test_default_mode_gives_package_install_hint_for_bash():

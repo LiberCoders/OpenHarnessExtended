@@ -24,7 +24,6 @@ class SendToExpertTool(BaseTool):
     input_model = SendToExpertToolInput
 
     async def execute(self, arguments: SendToExpertToolInput, context: ToolExecutionContext) -> ToolResult:
-        del context
         registry = get_channel_registry()
         handle = registry.get_by_expert_id(arguments.expert_id)
         if handle is None:

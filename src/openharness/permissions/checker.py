@@ -11,6 +11,18 @@ from openharness.permissions.modes import PermissionMode
 
 log = logging.getLogger(__name__)
 
+# Expert-related tools (extended workers):
+# - get_expert_status: declared read-only on the tool → allowed without confirmation in default
+#   mode via the generic "read-only tools" branch below (still usable in plan mode).
+# - delegate_to_expert / send_to_expert: mutating → auto-allowed in default mode only via
+#   EXPERT_DELEGATION_TOOLS_NO_PROMPT (blocked in plan mode like other mutating tools).
+EXPERT_DELEGATION_TOOLS_NO_PROMPT: frozenset[str] = frozenset(
+    {
+        "delegate_to_expert",
+        "send_to_expert",
+    }
+)
+
 # Paths that are always denied regardless of permission mode or user config.
 # These protect high-value credential and key material from LLM-directed access
 # (including via prompt injection).  Patterns use fnmatch syntax and are matched
@@ -138,6 +150,12 @@ class PermissionChecker:
             return PermissionDecision(
                 allowed=False,
                 reason="Plan mode blocks mutating tools until the user exits plan mode",
+            )
+
+        if tool_name in EXPERT_DELEGATION_TOOLS_NO_PROMPT:
+            return PermissionDecision(
+                allowed=True,
+                reason="Expert worker tools (delegate/send) run without confirmation in default mode",
             )
 
         # Default mode: require confirmation for mutating tools

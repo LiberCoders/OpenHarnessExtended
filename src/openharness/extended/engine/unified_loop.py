@@ -61,6 +61,17 @@ def _merge_mobile_gui_section(
     return merged
 
 
+def _coalesce_device_serial(*candidates: object) -> str | None:
+    """First non-empty string wins (spawn arg before settings `mobile_gui.device_serial`)."""
+    for raw in candidates:
+        if raw is None:
+            continue
+        s = str(raw).strip()
+        if s:
+            return s
+    return None
+
+
 @dataclass
 class ExpertRunConfig:
     """Spawned expert worker: common fields for all expert_type values."""
@@ -212,10 +223,22 @@ def build_expert_loop_pack(
             default=_DEFAULT_POST_ACTION_SETTLE_SECONDS,
         )
         transport = str(mobile_gui_opts.get("device_transport") or "").strip().lower()
+        spawn_serial = _coalesce_device_serial(config.device_serial)
+        settings_serial = _coalesce_device_serial(mobile_gui_opts.get("device_serial"))
+        serial = _coalesce_device_serial(config.device_serial, mobile_gui_opts.get("device_serial"))
+        if spawn_serial and settings_serial and spawn_serial != settings_serial:
+            logger.info(
+                "%s device_serial: spawn argument %r overrides merged mobile_gui.device_serial %r "
+                "(expert_id=%s)",
+                config.expert_type,
+                spawn_serial,
+                settings_serial,
+                expert_id,
+            )
         driver = create_mobile_driver(
             transport=transport,
             cwd=cwd,
-            serial=config.device_serial,
+            serial=serial,
             options=mobile_gui_opts,
         )
         perception = MobilePerception(driver=driver, steps_dir=store.steps_dir)

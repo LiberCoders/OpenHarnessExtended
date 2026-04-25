@@ -93,7 +93,17 @@ class LeaderQueueChannel:
         return out
 
     def close(self) -> None:
-        return None
+        if self._transport != "queue":
+            return
+        _close_multiprocessing_queue(self._downlink_queue)
+        _close_multiprocessing_queue(self._uplink_queue)
+        # Drop refs so the queues' SemLocks become unreachable. The registry's
+        # subsequent ``gc.collect()`` then runs the SemLock Finalize callbacks
+        # (sem_unlink + resource_tracker.unregister) before the React frontend
+        # SIGTERMs us — otherwise the resource_tracker prints
+        # "There appear to be N leaked semaphore objects to clean up at shutdown".
+        self._downlink_queue = None
+        self._uplink_queue = None
 
 class WorkerQueueChannel:
     """Worker side queue channel."""
@@ -127,7 +137,12 @@ class WorkerQueueChannel:
         return out
 
     def close(self) -> None:
-        return None
+        if self._transport != "queue":
+            return
+        _close_multiprocessing_queue(self._downlink_queue)
+        _close_multiprocessing_queue(self._uplink_queue)
+        self._downlink_queue = None
+        self._uplink_queue = None
 
 
 def create_channel(expert_id: str) -> LeaderQueueChannel:
@@ -210,4 +225,23 @@ def _read_channel_messages(
         if msg.direction == expected_direction:
             out.append(msg)
     return out, next_offset
+
+
+def _close_multiprocessing_queue(queue_obj: Any) -> None:
+    if queue_obj is None:
+        return
+
+    close = getattr(queue_obj, "close", None)
+    if callable(close):
+        try:
+            close()
+        except (ValueError, OSError):
+            pass
+
+    join_thread = getattr(queue_obj, "join_thread", None)
+    if callable(join_thread):
+        try:
+            join_thread()
+        except (AssertionError, RuntimeError, ValueError):
+            pass
 

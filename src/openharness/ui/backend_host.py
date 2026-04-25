@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,11 +111,15 @@ class ReactBackendHost:
         await self._emit(self._status_snapshot())
 
         reader = asyncio.create_task(self._read_requests())
+        # Emit ``shutdown`` only after ``close_runtime`` finishes. If we notify the
+        # React frontend first, it unmounts and SIGTERM-kills this process before
+        # ``finally`` runs — skipping expert teardown and leaking multiprocessing queues.
+        should_emit_shutdown = False
         try:
             while self._running:
                 request = await self._request_queue.get()
                 if request.type == "shutdown":
-                    await self._emit(BackendEvent(type="shutdown"))
+                    should_emit_shutdown = True
                     break
                 if request.type in ("permission_response", "question_response"):
                     continue
@@ -137,7 +142,7 @@ class ReactBackendHost:
                     finally:
                         self._busy = False
                     if not should_continue:
-                        await self._emit(BackendEvent(type="shutdown"))
+                        should_emit_shutdown = True
                         break
                     continue
                 if request.type != "submit_line":
@@ -155,14 +160,19 @@ class ReactBackendHost:
                 finally:
                     self._busy = False
                 if not should_continue:
-                    await self._emit(BackendEvent(type="shutdown"))
+                    should_emit_shutdown = True
                     break
         finally:
             reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reader
-            if self._bundle is not None:
-                await close_runtime(self._bundle)
+            try:
+                if self._bundle is not None:
+                    await close_runtime(self._bundle)
+            finally:
+                if should_emit_shutdown:
+                    with contextlib.suppress(Exception):
+                        await self._emit(BackendEvent(type="shutdown"))
         return 0
 
     async def _read_requests(self) -> None:
@@ -759,6 +769,7 @@ async def run_backend_host(
     """Run the structured React backend host."""
     if cwd:
         os.chdir(cwd)
+    _install_sigterm_channel_cleanup()
     host = ReactBackendHost(
         BackendHostConfig(
             model=model,
@@ -780,6 +791,37 @@ async def run_backend_host(
         )
     )
     return await host.run()
+
+
+def _install_sigterm_channel_cleanup() -> None:
+    """Synchronously release expert IPC sems when the React frontend SIGTERMs us.
+
+    React's force-exit timer (App.tsx) sends SIGTERM after 5s if the backend
+    hasn't already exited. The default SIGTERM handler skips Python's normal
+    teardown, which would leave the multiprocessing.Queue SemLocks dangling and
+    trigger ``resource_tracker: There appear to be N leaked semaphore objects``.
+    Installing a handler that calls ``close_all_channels`` before re-raising the
+    default behavior ensures the queues are released even on the SIGTERM path.
+    """
+    if os.name == "nt":
+        return  # SIGTERM semantics differ on Windows; the React side path is also different.
+
+    def _handler(_signum, _frame):  # type: ignore[no-untyped-def]
+        try:
+            from openharness.extended.channel import get_channel_registry
+            get_channel_registry().close_all_channels()
+        except Exception:
+            pass
+        # Restore default and re-raise so the process exits with the conventional
+        # 128+SIGTERM (143) status, matching prior behavior.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except (ValueError, OSError):
+        # signal.signal raises if not on the main thread; nothing to do.
+        pass
 
 
 __all__ = ["run_backend_host", "ReactBackendHost", "BackendHostConfig"]

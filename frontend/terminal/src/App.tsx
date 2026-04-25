@@ -1,4 +1,4 @@
-import React, {useDeferredValue, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useDeferredValue, useEffect, useMemo, useRef, useState} from 'react';
 import {Box, Text, useApp, useInput} from 'ink';
 
 import {CommandPicker} from './components/CommandPicker.js';
@@ -57,9 +57,22 @@ export function App({config}: {config: FrontendConfig}): React.JSX.Element {
 	);
 }
 
+const GRACEFUL_BACKEND_EXIT_MS = 5_000;
+
 function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const {exit} = useApp();
 	const {theme, setThemeName} = useTheme();
+	const forceExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const clearForceExitTimer = useCallback(() => {
+		if (forceExitTimerRef.current !== null) {
+			clearTimeout(forceExitTimerRef.current);
+			forceExitTimerRef.current = null;
+		}
+	}, []);
+	const onBackendSessionExit = useCallback(() => {
+		clearForceExitTimer();
+		exit();
+	}, [clearForceExitTimer, exit]);
 	const [input, setInput] = useState('');
 	const [modalInput, setModalInput] = useState('');
 	const [history, setHistory] = useState<string[]>([]);
@@ -69,7 +82,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [pickerIndex, setPickerIndex] = useState(0);
 	const [selectModal, setSelectModal] = useState<SelectModalState>(null);
 	const [selectIndex, setSelectIndex] = useState(0);
-	const session = useBackendSession(config, () => exit());
+	const session = useBackendSession(config, onBackendSessionExit);
+	useEffect(() => () => clearForceExitTimer(), [clearForceExitTimer]);
 	const deferredTranscript = useDeferredValue(session.transcript);
 	const deferredAssistantBuffer = useDeferredValue(session.assistantBuffer);
 	const deferredStatus = useDeferredValue(session.status);
@@ -178,10 +192,15 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	useInput((chunk, key) => {
 		const isPaste = chunk.length > 1 && !key.ctrl && !key.meta;
 
-		// Ctrl+C → exit
+		// Ctrl+C → ask backend to shut down; do not exit() immediately — that unmounts
+		// the session and SIGTERM-kills Python before ``close_runtime`` can run.
 		if (key.ctrl && chunk === 'c') {
 			session.sendRequest({type: 'shutdown'});
-			exit();
+			clearForceExitTimer();
+			forceExitTimerRef.current = setTimeout(() => {
+				forceExitTimerRef.current = null;
+				exit();
+			}, GRACEFUL_BACKEND_EXIT_MS);
 			return;
 		}
 

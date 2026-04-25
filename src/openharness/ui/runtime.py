@@ -370,6 +370,17 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
     except Exception:
         pass
 
+    # Release multiprocessing.Queue SemLocks BEFORE the slow steps below
+    # (mcp_manager.close, SESSION_END hook). If the React frontend's 5s
+    # force-exit timer fires while those are running, SIGTERM lands but
+    # the channel sems are already gone — no resource_tracker leak warning.
+    try:
+        from openharness.extended.channel import get_channel_registry
+
+        get_channel_registry().close_all_channels()
+    except Exception:
+        pass
+
     await stop_docker_sandbox()
     # Extract local environment rules from session before closing
     try:

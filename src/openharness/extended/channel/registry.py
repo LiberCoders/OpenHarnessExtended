@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,6 +32,30 @@ class ChannelRegistry:
     def __init__(self) -> None:
         self._handles: dict[str, ExpertHandle] = {}
         self._task_to_expert: dict[str, str] = {}
+
+    def close_all_channels(self) -> None:
+        """Close leader-side IPC for every registered expert.
+
+        ``Queue.close()`` alone does not release the queue's three internal SemLocks
+        (``_sem``, ``_rlock``, ``_wlock``) from ``multiprocessing.resource_tracker``;
+        that only happens when the SemLock is garbage-collected (its
+        ``util.Finalize`` callback calls ``sem_unlink`` + ``resource_tracker.unregister``).
+        So we drop every reference path and force a GC sweep here. Without this, the
+        SIGTERM the React frontend sends shortly after we emit ``shutdown`` skips
+        interpreter cleanup and ``resource_tracker`` prints
+        "There appear to be N leaked semaphore objects to clean up at shutdown".
+        """
+        for handle in list(self._handles.values()):
+            try:
+                handle.channel.close()
+            except Exception:
+                pass
+        # Drop every reference path to the queues so SemLock weakrefs can fire.
+        self._handles.clear()
+        self._task_to_expert.clear()
+        # Force a collection to run the SemLock Finalize callbacks now,
+        # while the resource_tracker pipe is still open.
+        gc.collect()
 
     def register(self, handle: ExpertHandle) -> None:
         self._handles[handle.expert_id] = handle

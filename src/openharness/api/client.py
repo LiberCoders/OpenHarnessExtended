@@ -227,6 +227,9 @@ class AnthropicApiClient:
             }
             params["extra_headers"] = {"x-client-request-id": str(uuid.uuid4())}
 
+        from openharness.api.request_log import log_request
+        log_request("anthropic", params)
+
         try:
             stream_api = self._client.beta.messages if self._claude_oauth else self._client.messages
             async with stream_api.stream(**params) as stream:

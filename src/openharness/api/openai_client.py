@@ -313,6 +313,9 @@ class OpenAICompatibleClient:
         # Buffer to strip inline <think>…</think> blocks across streaming chunks.
         _think_buf = ""
 
+        from openharness.api.request_log import log_request
+        log_request("openai", params)
+
         stream = await self._client.chat.completions.create(**params)
         async for chunk in stream:
             if not chunk.choices:

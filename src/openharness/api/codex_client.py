@@ -252,6 +252,9 @@ class CodexApiClient:
         if request.tools:
             body["tools"] = _convert_tools_to_codex(request.tools)
 
+        from openharness.api.request_log import log_request
+        log_request("codex", body)
+
         content: list[TextBlock | ToolUseBlock] = []
         current_text_parts: list[str] = []
         completed_response: dict[str, Any] | None = None

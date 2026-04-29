@@ -184,6 +184,22 @@ def _build_alias_to_packages() -> dict[str, list[str]]:
 NAME_PACKAGE_DICT = _build_alias_to_packages()
 
 
+def register_task_apps(apps: list[dict]) -> None:
+    """Inject task-specific {name, package} entries into NAME_PACKAGE_DICT.
+
+    Entries from the task's apps list take priority over built-in aliases so
+    that open("Mail") resolves to the task-specific package rather than any
+    generic alias.  Existing entries for the same normalized key are replaced.
+    """
+    for app in apps:
+        name = str(app.get("name") or "").strip()
+        pkg = str(app.get("package") or "").strip()
+        if not name or not pkg:
+            continue
+        nk = normalize_alias_key(name)
+        NAME_PACKAGE_DICT[nk] = [pkg]
+
+
 def resolve_open_candidates(app_query: str) -> list[str]:
     """Return ordered package id candidates for an `open` text query."""
     q = app_query.strip()

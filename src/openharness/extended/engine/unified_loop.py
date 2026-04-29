@@ -16,6 +16,7 @@ from openharness.extended.experts.mobile_gui.action_executor import ActionExecut
 from openharness.extended.experts.mobile_gui.backends.registry import resolve_gui_backend
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
 from openharness.extended.experts.mobile_gui.device import create_mobile_driver
+from openharness.extended.experts.mobile_gui.device.package_aliases import register_task_apps
 from openharness.extended.experts.mobile_gui.perception import MobilePerception
 from openharness.extended.experts.mobile_gui.reasoning import MobileGuiReasoning
 from openharness.extended.experts.mobile_gui.state_store import MobileGuiStateStore
@@ -222,6 +223,9 @@ def build_expert_loop_pack(
             mobile_gui_opts.get("post_action_settle_seconds"),
             default=_DEFAULT_POST_ACTION_SETTLE_SECONDS,
         )
+        task_apps = mobile_gui_opts.get("apps")
+        if isinstance(task_apps, list) and task_apps:
+            register_task_apps(task_apps)
         transport = str(mobile_gui_opts.get("device_transport") or "").strip().lower()
         spawn_serial = _coalesce_device_serial(config.device_serial)
         settings_serial = _coalesce_device_serial(mobile_gui_opts.get("device_serial"))

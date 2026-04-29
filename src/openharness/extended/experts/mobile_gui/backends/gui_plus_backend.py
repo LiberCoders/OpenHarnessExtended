@@ -66,6 +66,7 @@ class GuiPlusBackend(GuiInferenceBackend):
         self._history_n = int(config.get("history_n") or 4)
         self._session_id = str(config.get("session_id") or uuid.uuid4())
         self._instruction = str(config.get("instruction") or "").strip()
+        self._today_override: str | None = str((config.get("prompt_meta") or {}).get("today") or "").strip() or None
         self._history: list[dict[str, str]] = []  # [{"output": "...", "image_path": "..."}]
         self._http_client = httpx.Client(verify=self._tls_verify, timeout=120.0)
         self._client = OpenAI(
@@ -115,7 +116,7 @@ class GuiPlusBackend(GuiInferenceBackend):
         """Parse GUI-Plus response using a parser registry."""
         payload = _extract_gui_plus_arguments(response_text)
         if payload is None:
-            raise ValueError("Failed to parse GUI-Plus tool_call arguments")
+            raise ValueError(f"Failed to parse GUI-Plus tool_call arguments: {response_text}")
         action = str(payload.get("action") or "").strip().lower()
         parser = _ACTION_PARSERS.get(action)
         if parser is None and action in {"call_user", "calluser"}:
@@ -164,8 +165,14 @@ class GuiPlusBackend(GuiInferenceBackend):
 
         previous_actions_str = "\n".join(previous_actions) if previous_actions else "None"
 
-        today = datetime.today()
         weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        if self._today_override:
+            try:
+                today = datetime.strptime(self._today_override, "%Y-%m-%d")
+            except ValueError:
+                today = datetime.today()
+        else:
+            today = datetime.today()
         weekday = weekday_names[today.weekday()]
         formatted_date = today.strftime("%Y年%m月%d日") + " " + weekday
         ground_info = f"今天的日期是:{formatted_date}。"
@@ -377,6 +384,7 @@ _ACTION_PARSERS: dict[str, Any] = {
     "scroll": _parse_swipe,
     "type": _parse_type,
     "open": _parse_open,
+    "open_app": _parse_open,
     "home": _parse_home,
     "back": _parse_back,
     "system_button": _parse_system_button,

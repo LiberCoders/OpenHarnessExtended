@@ -15,7 +15,7 @@ from openharness.api.copilot_client import CopilotClient
 from openharness.api.openai_client import OpenAICompatibleClient
 from openharness.api.provider import auth_status, detect_provider
 from openharness.bridge import get_bridge_manager
-from openharness.commands import CommandContext, CommandResult, create_default_command_registry
+from openharness.commands import CommandContext, CommandResult, MemoryCommandBackend, create_default_command_registry
 from openharness.config import get_config_file_path, load_settings
 from openharness.engine import QueryEngine
 from openharness.engine.messages import (
@@ -64,6 +64,8 @@ class RuntimeBundle:
     session_backend: SessionBackend = DEFAULT_SESSION_BACKEND
     extra_skill_dirs: tuple[str, ...] = ()
     extra_plugin_roots: tuple[str, ...] = ()
+    memory_backend: MemoryCommandBackend | None = None
+    include_project_memory: bool = True
 
     def current_settings(self):
         """Return the effective settings for this session.
@@ -190,6 +192,8 @@ async def build_runtime(
     permission_mode: str | None = None,
     extra_skill_dirs: Iterable[str | Path] | None = None,
     extra_plugin_roots: Iterable[str | Path] | None = None,
+    memory_backend: MemoryCommandBackend | None = None,
+    include_project_memory: bool = True,
 ) -> RuntimeBundle:
     """Build the shared runtime for an OpenHarness session."""
     settings_overrides: dict[str, Any] = {
@@ -262,6 +266,7 @@ async def build_runtime(
         latest_user_prompt=prompt,
         extra_skill_dirs=normalized_skill_dirs,
         extra_plugin_roots=normalized_plugin_roots,
+        include_project_memory=include_project_memory,
     )
     from uuid import uuid4
 
@@ -350,6 +355,8 @@ async def build_runtime(
         session_backend=session_backend or DEFAULT_SESSION_BACKEND,
         extra_skill_dirs=normalized_skill_dirs,
         extra_plugin_roots=normalized_plugin_roots,
+        memory_backend=memory_backend,
+        include_project_memory=include_project_memory,
     )
 
 
@@ -747,6 +754,8 @@ async def handle_line(
                 session_id=bundle.session_id,
                 extra_skill_dirs=bundle.extra_skill_dirs,
                 extra_plugin_roots=bundle.extra_plugin_roots,
+                memory_backend=bundle.memory_backend,
+                include_project_memory=bundle.include_project_memory,
             ),
         )
         if result.refresh_runtime:
@@ -764,6 +773,7 @@ async def handle_line(
                 latest_user_prompt=submit_prompt,
                 extra_skill_dirs=bundle.extra_skill_dirs,
                 extra_plugin_roots=bundle.extra_plugin_roots,
+                include_project_memory=bundle.include_project_memory,
             )
             bundle.engine.set_system_prompt(system_prompt)
             try:
@@ -798,6 +808,7 @@ async def handle_line(
                 latest_user_prompt=_last_user_text(bundle.engine.messages),
                 extra_skill_dirs=bundle.extra_skill_dirs,
                 extra_plugin_roots=bundle.extra_plugin_roots,
+                include_project_memory=bundle.include_project_memory,
             )
             bundle.engine.set_system_prompt(system_prompt)
             turns = result.continue_turns if result.continue_turns is not None else bundle.engine.max_turns
@@ -831,6 +842,7 @@ async def handle_line(
         latest_user_prompt=effective_line,
         extra_skill_dirs=bundle.extra_skill_dirs,
         extra_plugin_roots=bundle.extra_plugin_roots,
+        include_project_memory=bundle.include_project_memory,
     )
     bundle.engine.set_system_prompt(system_prompt)
     try:

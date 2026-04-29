@@ -191,6 +191,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 
 	useInput((chunk, key) => {
 		const isPaste = chunk.length > 1 && !key.ctrl && !key.meta;
+		const isEscape = key.escape || chunk === '\u001B';
 
 		// Ctrl+C → ask backend to shut down; do not exit() immediately — that unmounts
 		// the session and SIGTERM-kills Python before ``close_runtime`` can run.
@@ -271,7 +272,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				session.setModal(null);
 				return;
 			}
-			if (chunk.toLowerCase() === 'n' || key.escape) {
+			if (chunk.toLowerCase() === 'n' || isEscape) {
 				session.sendRequest({
 					type: 'permission_response',
 					request_id: session.modal.request_id,
@@ -286,6 +287,12 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		// --- Question modal (also appears while busy) ---
 		if (session.modal?.kind === 'question') {
 			return; // Let TextInput in ModalHost handle input
+		}
+
+		if (session.busy && isEscape) {
+			session.sendRequest({type: 'interrupt'});
+			session.setBusyLabel('Stopping current operation...');
+			return;
 		}
 
 		// --- Ignore input while busy ---
@@ -324,13 +331,13 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				}
 				return;
 			}
-			if (key.escape) {
+			if (isEscape) {
 				setInput('');
 				return;
 			}
 		}
 
-		if (key.escape) {
+		if (isEscape) {
 			const now = Date.now();
 			if (input && now - lastEscapeAt < 500) {
 				setInput('');
@@ -482,6 +489,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 						<Text color={theme.colors.primary}>enter</Text> send{'  '}
 						<Text color={theme.colors.primary}>/</Text> commands{'  '}
 						<Text color={theme.colors.primary}>{'\u2191\u2193'}</Text> history{'  '}
+						<Text color={theme.colors.primary}>esc</Text> stop{'  '}
 						<Text color={theme.colors.primary}>ctrl+c</Text> exit
 					</Text>
 				</Box>

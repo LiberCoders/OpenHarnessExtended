@@ -241,6 +241,14 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             default_model="MiniMax-M2.7",
             base_url="https://api.minimax.io/v1",
         ),
+        "nvidia": ProviderProfile(
+            label="NVIDIA NIM",
+            provider="nvidia",
+            api_format="openai",
+            auth_source="nvidia_api_key",
+            default_model="openai/gpt-oss-120b",
+            base_url="https://integrate.api.nvidia.com/v1",
+        ),
         "qwen": ProviderProfile(
             label="Qwen (DashScope)",
             provider="dashscope",
@@ -248,6 +256,14 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             auth_source="dashscope_api_key",
             default_model="qwen-plus",
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
+        "modelscope": ProviderProfile(
+            label="ModelScope",
+            provider="modelscope",
+            api_format="openai",
+            auth_source="modelscope_api_key",
+            default_model="deepseek-ai/DeepSeek-V4-Flash",
+            base_url="https://api-inference.modelscope.cn/v1",
         ),
     }
 
@@ -337,6 +353,8 @@ def auth_source_provider_name(auth_source: str) -> str:
         "moonshot_api_key": "moonshot",
         "gemini_api_key": "gemini",
         "minimax_api_key": "minimax",
+        "nvidia_api_key": "nvidia",
+        "modelscope_api_key": "modelscope",
     }
     return mapping.get(auth_source, auth_source)
 
@@ -378,6 +396,10 @@ def default_auth_source_for_provider(provider: str, api_format: str | None = Non
         return "gemini_api_key"
     if provider == "minimax":
         return "minimax_api_key"
+    if provider == "nvidia":
+        return "nvidia_api_key"
+    if provider == "modelscope":
+        return "modelscope_api_key"
     if provider == "openai" or api_format == "openai":
         return "openai_api_key"
     return "anthropic_api_key"
@@ -446,6 +468,32 @@ def _profile_from_flat_settings(settings: "Settings") -> tuple[str, ProviderProf
     return name, profile
 
 
+class VisionModelConfig(BaseModel):
+    """Configuration for the vision model used by the image_to_text tool.
+
+    When the active model does not support multimodal input, the agent loop
+    automatically falls back to this vision model to describe images.
+    """
+
+    model: str = ""
+    api_key: str = ""
+    base_url: str = ""
+
+    @classmethod
+    def from_env(cls) -> "VisionModelConfig":
+        """Load vision model config from environment variables."""
+        return cls(
+            model=os.environ.get("OPENHARNESS_VISION_MODEL", "").strip(),
+            api_key=os.environ.get("OPENHARNESS_VISION_API_KEY", "").strip(),
+            base_url=os.environ.get("OPENHARNESS_VISION_BASE_URL", "").strip(),
+        )
+
+    @property
+    def is_configured(self) -> bool:
+        """Return True when both model and api_key are set."""
+        return bool(self.model and self.api_key)
+
+
 class Settings(BaseModel):
     """Main settings model for OpenHarness."""
 
@@ -484,6 +532,9 @@ class Settings(BaseModel):
     effort: str = "medium"
     passes: int = 1
     verbose: bool = False
+
+    # Vision model (image-to-text fallback)
+    vision: VisionModelConfig = Field(default_factory=VisionModelConfig)
 
     def merged_profiles(self) -> dict[str, ProviderProfile]:
         """Return the saved profiles merged over the built-in catalog."""
@@ -700,6 +751,8 @@ class Settings(BaseModel):
             "dashscope_api_key": "DASHSCOPE_API_KEY",
             "moonshot_api_key": "MOONSHOT_API_KEY",
             "minimax_api_key": "MINIMAX_API_KEY",
+            "nvidia_api_key": "NVIDIA_API_KEY",
+            "modelscope_api_key": "MODELSCOPE_API_KEY",
         }.get(auth_source)
         if env_var:
             env_value = os.environ.get(env_var, "")

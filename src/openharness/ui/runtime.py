@@ -15,7 +15,13 @@ from openharness.api.copilot_client import CopilotClient
 from openharness.api.openai_client import OpenAICompatibleClient
 from openharness.api.provider import auth_status, detect_provider
 from openharness.bridge import get_bridge_manager
-from openharness.commands import CommandContext, CommandResult, MemoryCommandBackend, create_default_command_registry
+from openharness.commands import (
+    CommandContext,
+    CommandResult,
+    MemoryCommandBackend,
+    create_default_command_registry,
+    lookup_skill_slash_command,
+)
 from openharness.config import get_config_file_path, load_settings
 from openharness.engine import QueryEngine
 from openharness.engine.messages import (
@@ -43,6 +49,33 @@ AskUserPrompt = Callable[[str], Awaitable[str]]
 SystemPrinter = Callable[[str], Awaitable[None]]
 StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 ClearHandler = Callable[[], Awaitable[None]]
+
+
+def _resolve_vision_config(settings) -> dict[str, str]:
+    """Resolve the vision model configuration from settings or environment.
+
+    Priority: settings.vision fields > environment variables > empty.
+    """
+    from openharness.config.settings import VisionModelConfig
+
+    cfg = settings.vision
+    if cfg.is_configured:
+        return {
+            "model": cfg.model,
+            "api_key": cfg.api_key,
+            "base_url": cfg.base_url,
+        }
+
+    # Fall back to environment variables
+    env_cfg = VisionModelConfig.from_env()
+    if env_cfg.is_configured:
+        return {
+            "model": env_cfg.model,
+            "api_key": env_cfg.api_key,
+            "base_url": env_cfg.base_url,
+        }
+
+    return {}
 
 
 @dataclass
@@ -316,6 +349,7 @@ async def build_runtime(
             "extra_skill_dirs": normalized_skill_dirs,
             "extra_plugin_roots": normalized_plugin_roots,
             "session_id": session_id,
+            "vision_model_config": _resolve_vision_config(settings),
             **restored_metadata,
         },
     )
@@ -737,26 +771,27 @@ async def handle_line(
             load_hook_registry(bundle.current_settings(), bundle.current_plugins())
         )
 
-    parsed = bundle.commands.lookup(line)
+    command_context = CommandContext(
+        engine=bundle.engine,
+        hooks_summary=bundle.hook_summary(),
+        mcp_summary=bundle.mcp_summary(),
+        plugin_summary=bundle.plugin_summary(),
+        cwd=bundle.cwd,
+        tool_registry=bundle.tool_registry,
+        app_state=bundle.app_state,
+        session_backend=bundle.session_backend,
+        session_id=bundle.session_id,
+        extra_skill_dirs=bundle.extra_skill_dirs,
+        extra_plugin_roots=bundle.extra_plugin_roots,
+        memory_backend=bundle.memory_backend,
+        include_project_memory=bundle.include_project_memory,
+    )
+    parsed = bundle.commands.lookup(line) or lookup_skill_slash_command(line, command_context)
     if parsed is not None:
         command, args = parsed
         result = await command.handler(
             args,
-            CommandContext(
-                engine=bundle.engine,
-                hooks_summary=bundle.hook_summary(),
-                mcp_summary=bundle.mcp_summary(),
-                plugin_summary=bundle.plugin_summary(),
-                cwd=bundle.cwd,
-                tool_registry=bundle.tool_registry,
-                app_state=bundle.app_state,
-                session_backend=bundle.session_backend,
-                session_id=bundle.session_id,
-                extra_skill_dirs=bundle.extra_skill_dirs,
-                extra_plugin_roots=bundle.extra_plugin_roots,
-                memory_backend=bundle.memory_backend,
-                include_project_memory=bundle.include_project_memory,
-            ),
+            command_context,
         )
         if result.refresh_runtime:
             refresh_runtime_client(bundle)

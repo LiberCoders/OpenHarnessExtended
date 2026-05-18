@@ -31,7 +31,6 @@ class ChannelRegistry:
 
     def __init__(self) -> None:
         self._handles: dict[str, ExpertHandle] = {}
-        self._task_to_expert: dict[str, str] = {}
 
     def close_all_channels(self) -> None:
         """Close leader-side IPC for every registered expert.
@@ -52,22 +51,14 @@ class ChannelRegistry:
                 pass
         # Drop every reference path to the queues so SemLock weakrefs can fire.
         self._handles.clear()
-        self._task_to_expert.clear()
         # Force a collection to run the SemLock Finalize callbacks now,
         # while the resource_tracker pipe is still open.
         gc.collect()
 
     def register(self, handle: ExpertHandle) -> None:
         self._handles[handle.expert_id] = handle
-        self._task_to_expert[handle.task_id] = handle.expert_id
 
     def get_by_expert_id(self, expert_id: str) -> ExpertHandle | None:
-        return self._handles.get(expert_id)
-
-    def get_by_task_id(self, task_id: str) -> ExpertHandle | None:
-        expert_id = self._task_to_expert.get(task_id)
-        if not expert_id:
-            return None
         return self._handles.get(expert_id)
 
     def refresh(self, handle: ExpertHandle) -> ExpertHandle:

@@ -15,8 +15,13 @@ from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 class GetExpertStatusToolInput(BaseModel):
     """Arguments for querying one delegated expert status."""
 
-    expert_id: str | None = Field(default=None)
-    task_id: str | None = Field(default=None)
+    expert_id: str = Field(
+        ...,
+        description=(
+            "The expert id returned by delegate_to_expert (shown as "
+            "expert_id=... in its output and metadata). Required."
+        ),
+    )
     wait: bool = Field(default=False, description="Wait until expert process exits.")
     timeout_seconds: float = Field(default=0.0, ge=0.0, le=3600.0)
 
@@ -25,7 +30,10 @@ class GetExpertStatusTool(BaseTool):
     """Read combined channel state + task lifecycle for one expert."""
 
     name = "get_expert_status"
-    description = "Query status of a delegated expert by expert_id or task_id."
+    description = (
+        "Query status of a delegated expert. You MUST pass expert_id "
+        "(the id returned by delegate_to_expert)."
+    )
     input_model = GetExpertStatusToolInput
 
     def is_read_only(self, arguments: GetExpertStatusToolInput) -> bool:
@@ -33,13 +41,7 @@ class GetExpertStatusTool(BaseTool):
 
     async def execute(self, arguments: GetExpertStatusToolInput, context: ToolExecutionContext) -> ToolResult:
         registry = get_channel_registry()
-        handle = None
-        if arguments.expert_id:
-            handle = registry.get_by_expert_id(arguments.expert_id)
-        elif arguments.task_id:
-            handle = registry.get_by_task_id(arguments.task_id)
-        else:
-            return ToolResult(output="expert_id or task_id is required", is_error=True)
+        handle = registry.get_by_expert_id(arguments.expert_id)
         if handle is None:
             return ToolResult(output="expert not found in channel registry", is_error=True)
 

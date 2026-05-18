@@ -496,11 +496,19 @@ def _parse_type(payload: dict[str, Any]) -> GuiAction:
     return GuiAction(action="type", text=str(payload.get("text") or ""))
 
 
+# Weaker models often emit the app name under a non-canonical key. Try the
+# canonical ``text`` first, then these fallbacks in order.
+_OPEN_TARGET_KEYS = ("text", "name", "app", "package", "button", "icon")
+
+
 def _parse_open(payload: dict[str, Any]) -> GuiAction:
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        raise ValueError(f"open requires text: {payload!r}")
-    return GuiAction(action="open", text=text)
+    target = next(
+        (s for key in _OPEN_TARGET_KEYS if (s := str(payload.get(key) or "").strip())),
+        "",
+    )
+    if not target:
+        raise ValueError(f"open requires one of {_OPEN_TARGET_KEYS}: {payload!r}")
+    return GuiAction(action="open", text=target)
 
 
 def _parse_home(_: dict[str, Any]) -> GuiAction:

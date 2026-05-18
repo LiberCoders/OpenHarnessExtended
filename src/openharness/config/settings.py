@@ -57,6 +57,29 @@ class PermissionSettings(BaseModel):
     denied_commands: list[str] = Field(default_factory=list)
 
 
+class PromptFieldSettings(BaseModel):
+    """Toggles for which system-prompt sections to include.
+
+    All fields default to ``True`` so an absent or partial ``prompt_fields``
+    config reproduces the historical behaviour (every section included). A
+    section is omitted only when its flag is explicitly set to ``False``.
+    """
+
+    environment: bool = True
+    session_mode: bool = True
+    reasoning_settings: bool = True
+    available_skills: bool = True
+    delegation_and_subagents: bool = True
+    project_instructions: bool = True
+    local_environment_rules: bool = True
+    issue_context: bool = True
+    pull_request_comments: bool = True
+    active_repo_context: bool = True
+    project_memory: bool = True
+    relevant_memories: bool = True
+    mobile_phone_apps: bool = True
+
+
 class MemorySettings(BaseModel):
     """Memory system configuration."""
 
@@ -553,6 +576,7 @@ class Settings(BaseModel):
     # Behavior
     system_prompt: str | None = None
     permission: PermissionSettings = Field(default_factory=PermissionSettings)
+    prompt_fields: PromptFieldSettings = Field(default_factory=PromptFieldSettings)
     hooks: dict[str, list[HookDefinition]] = Field(default_factory=dict)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)

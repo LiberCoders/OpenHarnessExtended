@@ -91,6 +91,7 @@ def build_system_prompt(
     custom_prompt: str | None = None,
     env: EnvironmentInfo | None = None,
     cwd: str | None = None,
+    include_environment: bool = True,
 ) -> str:
     """Build the complete system prompt.
 
@@ -98,14 +99,19 @@ def build_system_prompt(
         custom_prompt: If provided, replaces the base system prompt entirely.
         env: Pre-built EnvironmentInfo. If None, auto-detects.
         cwd: Working directory override (only used when env is None).
+        include_environment: When False, omit the ``# Environment`` section.
 
     Returns:
         The assembled system prompt string.
     """
+    base = custom_prompt if custom_prompt is not None else _BASE_SYSTEM_PROMPT
+
+    if not include_environment:
+        return base
+
     if env is None:
         env = get_environment_info(cwd=cwd)
 
-    base = custom_prompt if custom_prompt is not None else _BASE_SYSTEM_PROMPT
     env_section = _format_environment_section(env)
 
     return f"{base}\n\n{env_section}"

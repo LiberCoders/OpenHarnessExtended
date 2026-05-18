@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Iterable
 
@@ -17,8 +18,48 @@ from openharness.memory.relevance import format_relevant_memories, select_releva
 from openharness.memory.usage import mark_memory_used
 from openharness.personalization.rules import load_local_rules
 from openharness.prompts.claudemd import load_claude_md_prompt
+from openharness.prompts.environment import get_environment_info
 from openharness.prompts.system_prompt import build_system_prompt
 from openharness.skills.loader import load_skill_registry
+
+
+def _pf(settings: Settings, name: str) -> bool:
+    """Return whether a named system-prompt section is enabled.
+
+    Defaults to ``True`` when the flag is absent so partial or missing
+    ``prompt_fields`` config preserves the historical (all-sections) behaviour.
+    """
+    return bool(getattr(settings.prompt_fields, name, True))
+
+
+def _build_mobile_apps_section(settings: Settings) -> str | None:
+    """Build a section listing mobile phone apps from ``prompt_meta['apps']``."""
+    apps = (settings.prompt_meta or {}).get("apps")
+    if not isinstance(apps, list) or not apps:
+        return None
+    lines = [
+        "# Mobile Phone Apps",
+        "",
+        "The following apps are available on the connected mobile phone. "
+        "When operating the phone via the `mobile_gui` expert, refer to them by name:",
+        "",
+    ]
+    header_len = len(lines)
+    for app in apps:
+        if not isinstance(app, dict):
+            continue
+        name = str(app.get("name") or "").strip()
+        if not name:
+            continue
+        package = str(app.get("package") or "").strip()
+        role = str(app.get("role") or app.get("description") or "").strip()
+        line = f"- **{name}**" + (f" (`{package}`)" if package else "")
+        if role:
+            line += f": {role}"
+        lines.append(line)
+    if len(lines) == header_len:
+        return None
+    return "\n".join(lines)
 
 
 def _build_skills_section(
@@ -100,22 +141,30 @@ def build_runtime_system_prompt(
     if is_coordinator_mode():
         sections = [get_coordinator_system_prompt()]
     else:
-        sections = [build_system_prompt(custom_prompt=settings.system_prompt, cwd=str(cwd))]
+        env = get_environment_info(cwd=str(cwd))
+        today = (settings.prompt_meta or {}).get("today")
+        if today and str(today).strip():
+            env = dataclass_replace(env, date=str(today).strip())
+        include_env = _pf(settings, "environment")
+        custom = settings.system_prompt
+        sections = [
+            build_system_prompt(
+                custom_prompt=custom, env=env, include_environment=include_env
+            )
+        ]
 
-    if not is_coordinator_mode() and settings.system_prompt is None:
-        sections[0] = build_system_prompt(cwd=str(cwd))
-
-    if settings.fast_mode:
+    if settings.fast_mode and _pf(settings, "session_mode"):
         sections.append(
             "# Session Mode\nFast mode is enabled. Prefer concise replies, minimal tool use, and quicker progress over exhaustive exploration."
         )
 
-    sections.append(
-        "# Reasoning Settings\n"
-        f"- Effort: {settings.effort}\n"
-        f"- Passes: {settings.passes}\n"
-        "Adjust depth and iteration count to match these settings while still completing the task."
-    )
+    if _pf(settings, "reasoning_settings"):
+        sections.append(
+            "# Reasoning Settings\n"
+            f"- Effort: {settings.effort}\n"
+            f"- Passes: {settings.passes}\n"
+            "Adjust depth and iteration count to match these settings while still completing the task."
+        )
 
     skills_section = _build_skills_section(
         cwd,
@@ -123,26 +172,30 @@ def build_runtime_system_prompt(
         extra_plugin_roots=extra_plugin_roots,
         settings=settings,
     )
-    if skills_section and not is_coordinator_mode():
+    if skills_section and not is_coordinator_mode() and _pf(settings, "available_skills"):
         sections.append(skills_section)
 
-    if not is_coordinator_mode():
+    if not is_coordinator_mode() and _pf(settings, "delegation_and_subagents"):
         sections.append(_build_delegation_section())
 
+    mobile_apps_section = _build_mobile_apps_section(settings)
+    if mobile_apps_section and _pf(settings, "mobile_phone_apps"):
+        sections.append(mobile_apps_section)
+
     claude_md = load_claude_md_prompt(cwd)
-    if claude_md:
+    if claude_md and _pf(settings, "project_instructions"):
         sections.append(claude_md)
 
     local_rules = load_local_rules()
-    if local_rules:
+    if local_rules and _pf(settings, "local_environment_rules"):
         sections.append(f"# Local Environment Rules\n\n{local_rules}")
 
-    for title, path in (
-        ("Issue Context", get_project_issue_file(cwd)),
-        ("Pull Request Comments", get_project_pr_comments_file(cwd)),
-        ("Active Repo Context", get_project_active_repo_context_path(cwd)),
+    for title, path, field_name in (
+        ("Issue Context", get_project_issue_file(cwd), "issue_context"),
+        ("Pull Request Comments", get_project_pr_comments_file(cwd), "pull_request_comments"),
+        ("Active Repo Context", get_project_active_repo_context_path(cwd), "active_repo_context"),
     ):
-        if path.exists():
+        if path.exists() and _pf(settings, field_name):
             content = path.read_text(encoding="utf-8", errors="replace").strip()
             if content:
                 sections.append(f"# {title}\n\n```md\n{content[:12000]}\n```")
@@ -153,10 +206,10 @@ def build_runtime_system_prompt(
             max_entrypoint_lines=settings.memory.max_entrypoint_lines,
             max_entrypoint_bytes=settings.memory.max_entrypoint_bytes,
         )
-        if memory_section:
+        if memory_section and _pf(settings, "project_memory"):
             sections.append(memory_section)
 
-        if latest_user_prompt:
+        if latest_user_prompt and _pf(settings, "relevant_memories"):
             relevant = select_relevant_memories(
                 latest_user_prompt,
                 cwd,

@@ -92,14 +92,33 @@ class GuiPlusBackend(GuiInferenceBackend):
             "session_id": self._session_id,
             "messages": messages,
         }
-        completion = self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            max_tokens=self._max_tokens,
+        # Persist the request *before* the call so a failed step still leaves
+        # requests.json behind for inspection.
+        self._dump_request(
+            observation=observation,
+            context=context,
+            instruction=current_instruction,
+            request_payload=request_payload,
         )
+        try:
+            completion = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=self._max_tokens,
+            )
+        except Exception as exc:
+            self._dump_error(observation=observation, context=context, error=exc)
+            raise
         message = completion.choices[0].message
         text = str(message.content or "")
         reasoning_content = str(getattr(message, "reasoning_content", "") or "")
+        self._dump_response(
+            observation=observation,
+            context=context,
+            completion=completion,
+            text=text,
+            reasoning_content=reasoning_content,
+        )
         self._history.append(
             {
                 "output": text,
@@ -228,6 +247,149 @@ class GuiPlusBackend(GuiInferenceBackend):
 
         return messages
 
+    def _step_dir(self, observation: Observation) -> Path | None:
+        """Resolve the on-disk step directory from the screenshot path.
+
+        Perception writes ``steps/step_XXXX/screenshot.jpeg`` before infer, so
+        its parent is this step's directory. The directory is created on demand
+        by each ``_dump_*`` method, not here. Returns ``None`` only if the path
+        can't be resolved at all.
+        """
+        try:
+            screenshot_path = observation.screenshot_path
+            if not screenshot_path:
+                return None
+            return Path(screenshot_path).resolve().parent
+        except Exception:
+            return None
+
+    def _dump_request(
+        self,
+        *,
+        observation: Observation,
+        context: MobileGuiContext,
+        instruction: str,
+        request_payload: dict[str, Any],
+    ) -> None:
+        """Write requests.json before the model call (best-effort).
+
+        Only base64 image payloads are truncated; everything else is stored
+        verbatim.
+        """
+        step_dir = self._step_dir(observation)
+        if step_dir is None:
+            return
+        try:
+            step_dir.mkdir(parents=True, exist_ok=True)
+            request_doc = {
+                "step": context.step,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "model": self._model,
+                "base_url": self._base_url,
+                "session_id": self._session_id,
+                "max_tokens": self._max_tokens,
+                "history_n": self._history_n,
+                "history_len": len(self._history),
+                "today_override": self._today_override,
+                "instruction": instruction,
+                "extra_instruction": context.extra_instruction,
+                "request": _truncate_for_log(request_payload),
+            }
+            (step_dir / "requests.json").write_text(
+                json.dumps(request_doc, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _dump_response(
+        self,
+        *,
+        observation: Observation,
+        context: MobileGuiContext,
+        completion: Any,
+        text: str,
+        reasoning_content: str,
+    ) -> None:
+        """Write response.json after a successful model call (best-effort)."""
+        step_dir = self._step_dir(observation)
+        if step_dir is None:
+            return
+        try:
+            step_dir.mkdir(parents=True, exist_ok=True)
+            usage = getattr(completion, "usage", None)
+            try:
+                if usage is not None and hasattr(usage, "model_dump"):
+                    usage_dump: Any = usage.model_dump()
+                else:
+                    usage_dump = usage
+            except Exception:
+                usage_dump = None
+            try:
+                finish_reason = completion.choices[0].finish_reason
+            except Exception:
+                finish_reason = None
+            try:
+                if hasattr(completion, "model_dump"):
+                    completion_dump: Any = completion.model_dump()
+                else:
+                    completion_dump = completion
+            except Exception:
+                completion_dump = str(completion)
+
+            response_doc = {
+                "step": context.step,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "model": getattr(completion, "model", self._model),
+                "id": getattr(completion, "id", None),
+                "finish_reason": finish_reason,
+                "response_text": text,
+                "reasoning_content": reasoning_content,
+                "usage": usage_dump,
+                "completion": completion_dump,
+            }
+            (step_dir / "response.json").write_text(
+                json.dumps(response_doc, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _dump_error(
+        self,
+        *,
+        observation: Observation,
+        context: MobileGuiContext,
+        error: BaseException,
+    ) -> None:
+        """Write error.json when the model call fails (best-effort).
+
+        requests.json was already written before the call, so a failed step
+        still has both the request and the failure reason on disk.
+        """
+        step_dir = self._step_dir(observation)
+        if step_dir is None:
+            return
+        try:
+            step_dir.mkdir(parents=True, exist_ok=True)
+            import traceback
+
+            error_doc = {
+                "step": context.step,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "traceback": "".join(
+                    traceback.format_exception(type(error), error, error.__traceback__)
+                ),
+            }
+            (step_dir / "error.json").write_text(
+                json.dumps(error_doc, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
     def close(self) -> None:
         try:
             self._http_client.close()
@@ -237,6 +399,22 @@ class GuiPlusBackend(GuiInferenceBackend):
             self._client.close()
         except Exception:
             pass
+
+
+def _truncate_for_log(obj: Any, *, b64_sample: int = 48) -> Any:
+    """Deep-copy ``obj``, truncating only base64 data URLs.
+
+    Everything else is stored verbatim. Base64 image payloads keep a short
+    sample plus the original length so the JSON stays small.
+    """
+    if isinstance(obj, dict):
+        return {k: _truncate_for_log(v, b64_sample=b64_sample) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_truncate_for_log(v, b64_sample=b64_sample) for v in obj]
+    if isinstance(obj, str) and obj.startswith("data:") and ";base64," in obj:
+        head, b64 = obj.split(";base64,", 1)
+        return f"{head};base64,{b64[:b64_sample]}...[truncated, {len(b64)} base64 chars]"
+    return obj
 
 
 def _image_to_data_url(image_path: Path) -> str:

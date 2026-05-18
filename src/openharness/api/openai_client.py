@@ -43,7 +43,9 @@ MAX_DELAY = 30.0
 _MAX_COMPLETION_TOKEN_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
 
-def _token_limit_param_for_model(model: str, max_tokens: int) -> dict[str, int]:
+def _token_limit_param_for_model(
+    model: str, max_tokens: int
+) -> dict[str, int]:
     """Return the correct token limit field for the target OpenAI model.
 
     GPT-5 and the current reasoning-model families reject ``max_tokens`` and
@@ -57,7 +59,9 @@ def _token_limit_param_for_model(model: str, max_tokens: int) -> dict[str, int]:
     return {"max_tokens": max_tokens}
 
 
-def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _convert_tools_to_openai(
+    tools: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Convert Anthropic tool schemas to OpenAI function-calling format.
 
     Anthropic format:
@@ -67,14 +71,16 @@ def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]
     """
     result = []
     for tool in tools:
-        result.append({
-            "type": "function",
-            "function": {
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {}),
-            },
-        })
+        result.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {}),
+                },
+            }
+        )
     return result
 
 
@@ -101,24 +107,36 @@ def _convert_messages_to_openai(
             openai_messages.append(openai_msg)
         elif msg.role == "user":
             # User messages may contain text or tool_result blocks
-            tool_results = [b for b in msg.content if isinstance(b, ToolResultBlock)]
-            user_blocks = [b for b in msg.content if isinstance(b, (TextBlock, ImageBlock))]
+            tool_results = [
+                b for b in msg.content if isinstance(b, ToolResultBlock)
+            ]
+            user_blocks = [
+                b
+                for b in msg.content
+                if isinstance(b, (TextBlock, ImageBlock))
+            ]
 
             if tool_results:
                 # Each tool result becomes a separate message with role="tool"
                 for tr in tool_results:
-                    openai_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tr.tool_use_id,
-                        "content": tr.content,
-                    })
+                    openai_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tr.tool_use_id,
+                            "content": tr.content,
+                        }
+                    )
             if user_blocks:
                 content = _convert_user_content_to_openai(user_blocks)
                 if isinstance(content, str):
                     if content.strip():
-                        openai_messages.append({"role": "user", "content": content})
+                        openai_messages.append(
+                            {"role": "user", "content": content}
+                        )
                 elif content:
-                    openai_messages.append({"role": "user", "content": content})
+                    openai_messages.append(
+                        {"role": "user", "content": content}
+                    )
             if not tool_results and not user_blocks:
                 # Empty user message (shouldn't happen, but handle gracefully)
                 openai_messages.append({"role": "user", "content": ""})
@@ -126,23 +144,29 @@ def _convert_messages_to_openai(
     return openai_messages
 
 
-def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[dict[str, Any]]:
+def _convert_user_content_to_openai(
+    blocks: list[ContentBlock],
+) -> str | list[dict[str, Any]]:
     """Convert user text/image blocks into OpenAI chat content."""
     has_image = any(isinstance(block, ImageBlock) for block in blocks)
     if not has_image:
-        return "".join(block.text for block in blocks if isinstance(block, TextBlock))
+        return "".join(
+            block.text for block in blocks if isinstance(block, TextBlock)
+        )
 
     content: list[dict[str, Any]] = []
     for block in blocks:
         if isinstance(block, TextBlock) and block.text:
             content.append({"type": "text", "text": block.text})
         elif isinstance(block, ImageBlock):
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{block.media_type};base64,{block.data}",
-                },
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{block.media_type};base64,{block.data}",
+                    },
+                }
+            )
     return content
 
 
@@ -201,11 +225,13 @@ def _parse_assistant_response(response: Any) -> ConversationMessage:
                 args = json.loads(tc.function.arguments)
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            content.append(ToolUseBlock(
-                id=tc.id,
-                name=tc.function.name,
-                input=args,
-            ))
+            content.append(
+                ToolUseBlock(
+                    id=tc.id,
+                    name=tc.function.name,
+                    input=args,
+                )
+            )
 
     return ConversationMessage(role="assistant", content=content)
 
@@ -223,7 +249,9 @@ def _normalize_openai_base_url(base_url: str | None) -> str | None:
     path = parts.path.rstrip("/")
     if not path:
         path = "/v1"
-    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, path, parts.query, parts.fragment)
+    )
 
 
 class OpenAICompatibleClient:
@@ -241,7 +269,10 @@ class OpenAICompatibleClient:
         timeout: float | None = None,
         tls_verify: bool = True,
     ) -> None:
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "default_headers": {"Authorization": f"Bearer {api_key}"},
+        }
         normalized_base_url = _normalize_openai_base_url(base_url)
         if normalized_base_url:
             kwargs["base_url"] = normalized_base_url
@@ -249,10 +280,14 @@ class OpenAICompatibleClient:
             kwargs["timeout"] = timeout
         if not tls_verify:
             eff_timeout = float(timeout) if timeout is not None else 30.0
-            kwargs["http_client"] = httpx.AsyncClient(verify=False, timeout=eff_timeout)
+            kwargs["http_client"] = httpx.AsyncClient(
+                verify=False, timeout=eff_timeout
+            )
         self._client = AsyncOpenAI(**kwargs)
 
-    async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+    async def stream_message(
+        self, request: ApiMessageRequest
+    ) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final message, matching the Anthropic client interface."""
         last_error: Exception | None = None
 
@@ -268,10 +303,13 @@ class OpenAICompatibleClient:
                 if attempt >= MAX_RETRIES or not self._is_retryable(exc):
                     raise self._translate_error(exc) from exc
 
-                delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
+                delay = min(BASE_DELAY * (2**attempt), MAX_DELAY)
                 log.warning(
                     "OpenAI API request failed (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt + 1, MAX_RETRIES + 1, delay, exc,
+                    attempt + 1,
+                    MAX_RETRIES + 1,
+                    delay,
+                    exc,
                 )
                 yield ApiRetryEvent(
                     message=str(exc),
@@ -284,10 +322,16 @@ class OpenAICompatibleClient:
         if last_error is not None:
             raise self._translate_error(last_error) from last_error
 
-    async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+    async def _stream_once(
+        self, request: ApiMessageRequest
+    ) -> AsyncIterator[ApiStreamEvent]:
         """Single attempt: stream an OpenAI chat completion."""
-        openai_messages = _convert_messages_to_openai(request.messages, request.system_prompt)
-        openai_tools = _convert_tools_to_openai(request.tools) if request.tools else None
+        openai_messages = _convert_messages_to_openai(
+            request.messages, request.system_prompt
+        )
+        openai_tools = (
+            _convert_tools_to_openai(request.tools) if request.tools else None
+        )
 
         params: dict[str, Any] = {
             "model": request.model,
@@ -295,7 +339,9 @@ class OpenAICompatibleClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        params.update(_token_limit_param_for_model(request.model, request.max_tokens))
+        params.update(
+            _token_limit_param_for_model(request.model, request.max_tokens)
+        )
         if openai_tools:
             params["tools"] = openai_tools
             # Some providers (Kimi) error on empty reasoning_content in
@@ -314,6 +360,7 @@ class OpenAICompatibleClient:
         _think_buf = ""
 
         from openharness.api.request_log import log_request
+
         log_request("openai", params)
 
         stream = await self._client.chat.completions.create(**params)
@@ -386,11 +433,13 @@ class OpenAICompatibleClient:
                 args = json.loads(tc["arguments"])
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            content.append(ToolUseBlock(
-                id=tc["id"],
-                name=tc["name"],
-                input=args,
-            ))
+            content.append(
+                ToolUseBlock(
+                    id=tc["id"],
+                    name=tc["name"],
+                    input=args,
+                )
+            )
 
         final_message = ConversationMessage(role="assistant", content=content)
 

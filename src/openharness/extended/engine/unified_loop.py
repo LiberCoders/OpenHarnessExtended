@@ -223,7 +223,12 @@ def build_expert_loop_pack(
             mobile_gui_opts.get("post_action_settle_seconds"),
             default=_DEFAULT_POST_ACTION_SETTLE_SECONDS,
         )
-        task_apps = mobile_gui_opts.get("apps")
+        # prompt_meta is the canonical, top-level location for per-task metadata
+        # (apps, today) supplied by the caller via settings. Forwarded to the
+        # GUI backend below so it can ground its prompts.
+        raw_prompt_meta = getattr(settings, "prompt_meta", None) if settings is not None else None
+        prompt_meta = raw_prompt_meta if isinstance(raw_prompt_meta, dict) else {}
+        task_apps = prompt_meta.get("apps")
         if isinstance(task_apps, list) and task_apps:
             register_task_apps(task_apps)
         transport = str(mobile_gui_opts.get("device_transport") or "").strip().lower()
@@ -251,9 +256,16 @@ def build_expert_loop_pack(
             gui_backend_config = type_section.get("gui_backend")
         if gui_backend_config is None:
             gui_backend_config = mobile_gui_opts.get("gui_backend")
-        gui_cfg = gui_backend_config if isinstance(gui_backend_config, dict) else None
+        gui_cfg: dict[str, Any] = dict(gui_backend_config) if isinstance(gui_backend_config, dict) else {}
+        # Forward top-level prompt_meta into the backend config so the backend
+        # (e.g. GuiPlusBackend reads ``today``) can see it without each backend
+        # needing its own settings access. Backend-local prompt_meta wins on key
+        # collisions for explicit per-backend overrides.
+        if prompt_meta:
+            merged_meta = {**prompt_meta, **(gui_cfg.get("prompt_meta") or {})}
+            gui_cfg["prompt_meta"] = merged_meta
         backend = resolve_gui_backend(
-            gui_backend_config=gui_cfg,
+            gui_backend_config=gui_cfg or None,
         )
         reasoning = MobileGuiReasoning(backend)
         executor = ActionExecutor(driver=driver)

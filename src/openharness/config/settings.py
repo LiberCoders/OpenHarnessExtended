@@ -474,6 +474,12 @@ class Settings(BaseModel):
     allow_project_plugins: bool = False
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     mobile_gui: dict[str, Any] = Field(default_factory=dict)
+    # Task-time metadata supplied by the caller via settings and forwarded to
+    # expert backends (e.g. mobile_gui's GUI backend reads ``today`` and
+    # ``apps`` to ground its prompts). OpenHarness only reads and forwards it;
+    # populating it per task is the caller's responsibility. Safe to leave
+    # empty for ad-hoc runs.
+    prompt_meta: dict[str, Any] = Field(default_factory=dict)
 
     # UI
     theme: str = "default"

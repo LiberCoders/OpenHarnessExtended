@@ -85,7 +85,8 @@ class DelegateToExpertToolInput(BaseModel):
     task: str = Field(
         description=(
             "Task description for the delegated expert, "
-            "e.g. operating an app on a connected mobile device."
+            "e.g. operating an app on a connected mobile device. "
+            "Please use Chinese to briefly describe the task."
         )
     )
     capability_profile: str = Field(default="hdc_minimal_v1")

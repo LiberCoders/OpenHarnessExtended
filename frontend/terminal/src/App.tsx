@@ -1,17 +1,18 @@
-import React, {useCallback, useDeferredValue, useEffect, useMemo, useRef, useState} from 'react';
-import {Box, Text, useApp, useInput} from 'ink';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Text, useApp, useInput } from 'ink';
 
-import {CommandPicker} from './components/CommandPicker.js';
-import {ConversationView} from './components/ConversationView.js';
-import {ModalHost} from './components/ModalHost.js';
-import {PromptInput} from './components/PromptInput.js';
-import {SelectModal, type SelectOption} from './components/SelectModal.js';
-import {StatusBar} from './components/StatusBar.js';
-import {SwarmPanel} from './components/SwarmPanel.js';
-import {TodoPanel} from './components/TodoPanel.js';
-import {useBackendSession} from './hooks/useBackendSession.js';
-import {ThemeProvider, useTheme} from './theme/ThemeContext.js';
-import type {FrontendConfig} from './types.js';
+import { readClipboardImage, type ImageAttachment } from './clipboardImage.js';
+import { CommandPicker } from './components/CommandPicker.js';
+import { ConversationView } from './components/ConversationView.js';
+import { ModalHost } from './components/ModalHost.js';
+import { PromptInput } from './components/PromptInput.js';
+import { SelectModal, type SelectOption } from './components/SelectModal.js';
+import { StatusBar } from './components/StatusBar.js';
+import { SwarmPanel } from './components/SwarmPanel.js';
+import { TodoPanel } from './components/TodoPanel.js';
+import { useBackendSession } from './hooks/useBackendSession.js';
+import { ThemeProvider, useTheme } from './theme/ThemeContext.js';
+import type { FrontendConfig, ImageAttachmentPayload } from './types.js';
 
 const rawReturnSubmit = process.env.OPENHARNESS_FRONTEND_RAW_RETURN === '1';
 const scriptedSteps = (() => {
@@ -48,7 +49,7 @@ type SelectModalState = {
 	onSelect: (value: string) => void;
 } | null;
 
-export function App({config}: {config: FrontendConfig}): React.JSX.Element {
+export function App({ config }: { config: FrontendConfig }): React.JSX.Element {
 	const initialTheme = String((config as Record<string, unknown>).theme ?? 'default');
 	return (
 		<ThemeProvider initialTheme={initialTheme}>
@@ -59,9 +60,9 @@ export function App({config}: {config: FrontendConfig}): React.JSX.Element {
 
 const GRACEFUL_BACKEND_EXIT_MS = 5_000;
 
-function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
-	const {exit} = useApp();
-	const {theme, setThemeName} = useTheme();
+function AppInner({ config }: { config: FrontendConfig }): React.JSX.Element {
+	const { exit } = useApp();
+	const { theme, setThemeName } = useTheme();
 	const forceExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const clearForceExitTimer = useCallback(() => {
 		if (forceExitTimerRef.current !== null) {
@@ -77,6 +78,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [modalInput, setModalInput] = useState('');
 	const [history, setHistory] = useState<string[]>([]);
 	const [historyIndex, setHistoryIndex] = useState(-1);
+	const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
+	const [clipboardStatus, setClipboardStatus] = useState<string | null>(null);
 	const [lastEscapeAt, setLastEscapeAt] = useState(0);
 	const [scriptIndex, setScriptIndex] = useState(0);
 	const [pickerIndex, setPickerIndex] = useState(0);
@@ -91,6 +94,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const deferredTodoMarkdown = useDeferredValue(session.todoMarkdown);
 	const deferredSwarmTeammates = useDeferredValue(session.swarmTeammates);
 	const deferredSwarmNotifications = useDeferredValue(session.swarmNotifications);
+	const clipboardStatusTimerRef = useRef<NodeJS.Timeout | null>(null);
 
 	useEffect(() => {
 		const nextTheme = session.status.theme;
@@ -98,6 +102,47 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			setThemeName(nextTheme);
 		}
 	}, [session.status.theme, setThemeName]);
+
+	useEffect(() => {
+		return () => {
+			if (clipboardStatusTimerRef.current) {
+				clearTimeout(clipboardStatusTimerRef.current);
+			}
+		};
+	}, []);
+
+	const setTemporaryClipboardStatus = (message: string): void => {
+		setClipboardStatus(message);
+		if (clipboardStatusTimerRef.current) {
+			clearTimeout(clipboardStatusTimerRef.current);
+		}
+		clipboardStatusTimerRef.current = setTimeout(() => {
+			setClipboardStatus(null);
+			clipboardStatusTimerRef.current = null;
+		}, 2500);
+	};
+
+	const attachClipboardImage = (): void => {
+		void (async () => {
+			const image = await readClipboardImage();
+			if (!image) {
+				setTemporaryClipboardStatus('No image found in clipboard');
+				return;
+			}
+			setImageAttachments((items) => [...items, image]);
+			setTemporaryClipboardStatus(`Attached ${image.label}`);
+		})().catch((error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			setTemporaryClipboardStatus(`Clipboard image unavailable: ${message}`);
+		});
+	};
+
+	const imagePayloads = (): ImageAttachmentPayload[] =>
+		imageAttachments.map((image) => ({
+			media_type: image.media_type,
+			data: image.data,
+			source_path: image.source_path,
+		}));
 
 	// Current tool name for spinner
 	const currentToolName = useMemo(() => {
@@ -143,9 +188,9 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		setSelectIndex(initialIndex >= 0 ? initialIndex : 0);
 		setSelectModal({
 			title: req.title,
-			options: req.options.map((o) => ({value: o.value, label: o.label, description: o.description, active: o.active})),
+			options: req.options.map((o) => ({ value: o.value, label: o.label, description: o.description, active: o.active })),
 			onSelect: (value) => {
-				session.sendRequest({type: 'apply_select_command', command: req.command, value});
+				session.sendRequest({ type: 'apply_select_command', command: req.command, value });
 				session.setBusy(true);
 				setSelectModal(null);
 			},
@@ -158,13 +203,13 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		const trimmed = cmd.trim();
 
 		if (SELECTABLE_COMMANDS.has(trimmed)) {
-			session.sendRequest({type: 'select_command', command: trimmed.slice(1)});
+			session.sendRequest({ type: 'select_command', command: trimmed.slice(1) });
 			return true;
 		}
 
 		// /permissions → show mode picker
 		if (trimmed === '/permissions' || trimmed === '/permissions show') {
-			session.sendRequest({type: 'select_command', command: 'permissions'});
+			session.sendRequest({ type: 'select_command', command: 'permissions' });
 			return true;
 		}
 
@@ -172,9 +217,9 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		if (trimmed === '/plan') {
 			const currentMode = String(session.status.permission_mode ?? 'default');
 			if (currentMode === 'plan') {
-				session.sendRequest({type: 'submit_line', line: '/plan off'});
+				session.sendRequest({ type: 'submit_line', line: '/plan off' });
 			} else {
-				session.sendRequest({type: 'submit_line', line: '/plan on'});
+				session.sendRequest({ type: 'submit_line', line: '/plan on' });
 			}
 			session.setBusy(true);
 			return true;
@@ -182,7 +227,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 
 		// /resume → request session list from backend (will trigger select_request)
 		if (trimmed === '/resume') {
-			session.sendRequest({type: 'select_command', command: 'resume'});
+			session.sendRequest({ type: 'select_command', command: 'resume' });
 			return true;
 		}
 
@@ -197,16 +242,21 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		// the session and SIGTERM-kills Python before ``close_runtime`` can run.
 		if (key.ctrl && chunk === 'c') {
 			if (session.busy) {
-				session.sendRequest({type: 'interrupt'});
+				session.sendRequest({ type: 'interrupt' });
 				session.setBusyLabel('Stopping current operation...');
 				return;
 			}
-			session.sendRequest({type: 'shutdown'});
+			session.sendRequest({ type: 'shutdown' });
 			clearForceExitTimer();
 			forceExitTimerRef.current = setTimeout(() => {
 				forceExitTimerRef.current = null;
 				exit();
 			}, GRACEFUL_BACKEND_EXIT_MS);
+			return;
+		}
+
+		if (!session.busy && key.ctrl && chunk === 'v') {
+			attachClipboardImage();
 			return;
 		}
 
@@ -289,13 +339,48 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			return;
 		}
 
+		// --- Edit diff modal (also appears while busy) ---
+		if (session.modal?.kind === 'edit_diff') {
+			if (chunk.toLowerCase() === 'y') {
+				session.sendRequest({
+					type: 'permission_response',
+					request_id: session.modal.request_id,
+					allowed: true,
+					permission_reply: 'once',
+				});
+				session.setModal(null);
+				return;
+			}
+			if (chunk.toLowerCase() === 'a') {
+				session.sendRequest({
+					type: 'permission_response',
+					request_id: session.modal.request_id,
+					allowed: true,
+					permission_reply: 'always',
+				});
+				session.setModal(null);
+				return;
+			}
+			if (chunk.toLowerCase() === 'n' || isEscape) {
+				session.sendRequest({
+					type: 'permission_response',
+					request_id: session.modal.request_id,
+					allowed: false,
+					permission_reply: 'reject',
+				});
+				session.setModal(null);
+				return;
+			}
+			return;
+		}
+
 		// --- Question modal (also appears while busy) ---
 		if (session.modal?.kind === 'question') {
 			return; // Let TextInput in ModalHost handle input
 		}
 
 		if (session.busy && isEscape) {
-			session.sendRequest({type: 'interrupt'});
+			session.sendRequest({ type: 'interrupt' });
 			session.setBusyLabel('Stopping current operation...');
 			return;
 		}
@@ -308,7 +393,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		// Empty-input Tab opens the permission mode picker. This makes leaving
 		// plan mode explicit without requiring users to remember /permissions.
 		if (!showPicker && key.tab && input.trim() === '') {
-			session.sendRequest({type: 'select_command', command: 'permissions'});
+			session.sendRequest({ type: 'select_command', command: 'permissions' });
 			return;
 		}
 
@@ -351,8 +436,9 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 
 		if (isEscape) {
 			const now = Date.now();
-			if (input && now - lastEscapeAt < 500) {
+			if ((input || imageAttachments.length > 0) && now - lastEscapeAt < 500) {
 				setInput('');
+				setImageAttachments([]);
 				setHistoryIndex(-1);
 				setLastEscapeAt(0);
 				return;
@@ -392,25 +478,28 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			setModalInput('');
 			return;
 		}
-		if (!value.trim() || session.busy || !session.ready) {
+		if ((!value.trim() && imageAttachments.length === 0) || session.busy || !session.ready) {
 			if (session.busy && value.trim() === '/stop') {
-				session.sendRequest({type: 'interrupt'});
+				session.sendRequest({ type: 'interrupt' });
 				session.setBusyLabel('Stopping current operation...');
 				setInput('');
 			}
 			return;
 		}
 		// Check if it's an interactive command
-		if (handleCommand(value)) {
+		if (imageAttachments.length === 0 && handleCommand(value)) {
 			setHistory((items) => [...items, value]);
 			setHistoryIndex(-1);
 			setInput('');
 			return;
 		}
-		session.sendRequest({type: 'submit_line', line: value});
-		setHistory((items) => [...items, value]);
+		session.sendRequest({ type: 'submit_line', line: value, images: imagePayloads() });
+		if (value.trim()) {
+			setHistory((items) => [...items, value]);
+		}
 		setHistoryIndex(-1);
 		setInput('');
+		setImageAttachments([]);
 		session.setBusy(true);
 	};
 
@@ -495,6 +584,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 					toolName={session.busy ? currentToolName : undefined}
 					statusLabel={session.busy ? (session.busyLabel ?? (currentToolName ? `Running ${currentToolName}...` : 'Running agent loop...')) : undefined}
 					suppressSubmit={showPicker}
+					imageAttachmentLabels={imageAttachments.map((image) => image.label)}
+					clipboardStatus={clipboardStatus}
 				/>
 			)}
 

@@ -290,6 +290,7 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
     bundle = None
     pack: ExpertLoopPack | None = None
     status = "running"
+    error_message = ""
     try:
         if config.expert_type not in WORKER_IMPLEMENTED_EXPERT_TYPES:
             raise RuntimeError(f"worker loop not implemented for expert_type={config.expert_type!r}")
@@ -329,34 +330,46 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
 
     except BaseException as exc:
         status = "failed"
+        # Always capture the specific reason, even on bootstrap failures
+        # (build_runtime / start_runtime / pack build, incl. backend __init__)
+        # where ``pack`` is still None. The finally block forwards this to the
+        # leader so the main conversation sees *why* the expert died.
+        message = str(exc).strip() or exc.__class__.__name__
+        if isinstance(exc, SystemExit):
+            message = (
+                f"worker exited early with SystemExit(code={exc.code!r}). "
+                "Please check runtime auth/model/backend configuration."
+            )
+        error_message = f"{type(exc).__name__}: {message}"
         if pack is not None and pack.context is not None:
             pack.context.last_action = "terminate(exception)"
-            message = str(exc).strip()
-            if not message:
-                message = exc.__class__.__name__
-            if isinstance(exc, SystemExit):
-                message = (
-                    f"worker exited early with SystemExit(code={exc.code!r}). "
-                    "Please check runtime auth/model configuration."
-                )
-            pack.context.last_message = message
+            pack.context.last_message = error_message
         logger.exception(
             "%s worker failed: expert_id=%s error=%s",
             config.expert_type,
             expert_id,
-            str(exc).strip() or type(exc).__name__,
+            error_message,
         )
     finally:
         logger.info("%s worker finalize: expert_id=%s status=%s", config.expert_type, expert_id, status)
         ctx = pack.context if pack is not None else None
         st = pack.store if pack is not None else None
+        # Bootstrap failure: no pack/store, so result.json would otherwise never
+        # be written and get_expert_status would only show a generic
+        # "worker_stopped_without_result". Create the store at the canonical
+        # state root so the specific reason lands where the leader reads it.
+        if st is None and status not in {"completed", "killed"}:
+            try:
+                st = MobileGuiStateStore(get_data_dir() / "extended" / "experts" / expert_id)
+            except Exception:
+                st = None
         if st is not None:
             st.save_result(
                 {
                     "expert_id": expert_id,
                     "status": status,
-                    "last_action": getattr(ctx, "last_action", "") if ctx else "",
-                    "message": getattr(ctx, "last_message", "") if ctx else "",
+                    "last_action": getattr(ctx, "last_action", "") if ctx else "terminate(bootstrap_failure)",
+                    "message": getattr(ctx, "last_message", "") if ctx else error_message,
                     "last_screenshot": getattr(ctx, "last_screenshot", "") if ctx else "",
                     "steps": getattr(ctx, "step", 0) if ctx else 0,
                 }
@@ -369,6 +382,22 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
         if ctx is not None:
             try:
                 channel.send_to_leader("status", build_status_digest(ctx, status=status))
+            except Exception:
+                pass
+        elif error_message:
+            # No context (bootstrap failure): synthesize a digest so the leader
+            # still receives the specific reason over the channel.
+            try:
+                channel.send_to_leader(
+                    "status",
+                    {
+                        "status": status,
+                        "step": "0",
+                        "last_action": "terminate(bootstrap_failure)",
+                        "message": error_message,
+                        "last_screenshot": "",
+                    },
+                )
             except Exception:
                 pass
         try:

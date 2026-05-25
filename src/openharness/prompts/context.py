@@ -17,6 +17,7 @@ from openharness.memory import load_memory_prompt
 from openharness.memory.relevance import format_relevant_memories, select_relevant_memories
 from openharness.memory.usage import mark_memory_used
 from openharness.personalization.rules import load_local_rules
+from openharness.permissions.modes import PermissionMode
 from openharness.prompts.claudemd import load_claude_md_prompt
 from openharness.prompts.environment import get_environment_info
 from openharness.prompts.system_prompt import build_system_prompt
@@ -128,6 +129,28 @@ def _build_delegation_section() -> str:
     )
 
 
+def _build_permission_mode_section(settings: Settings) -> str:
+    """Build current permission-mode guidance for the model."""
+    mode = settings.permission.mode
+    if mode == PermissionMode.PLAN:
+        guidance = (
+            "Plan mode is enabled. Treat this session as read-only planning and analysis. "
+            "Do not call mutating tools such as file writes, edits, package installs, "
+            "state-changing shell commands, or task-spawning actions unless the user exits plan mode."
+        )
+    elif mode == PermissionMode.FULL_AUTO:
+        guidance = (
+            "Full-auto permission mode is enabled. You may use mutating tools when they are necessary "
+            "for the user's request, while still keeping changes scoped and intentional."
+        )
+    else:
+        guidance = (
+            "Default permission mode is enabled. Read-only tools can run directly; mutating tools "
+            "may require explicit user approval."
+        )
+    return f"# Current Permission Mode\n{guidance}"
+
+
 def build_runtime_system_prompt(
     settings: Settings,
     *,
@@ -152,6 +175,8 @@ def build_runtime_system_prompt(
                 custom_prompt=custom, env=env, include_environment=include_env
             )
         ]
+
+    sections.append(_build_permission_mode_section(settings))
 
     if settings.fast_mode and _pf(settings, "session_mode"):
         sections.append(

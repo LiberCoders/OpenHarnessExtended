@@ -380,7 +380,8 @@ class OpenAICompatibleClient:
             # tool-call follow-ups.  Omit the entire stream_options key if
             # tools are present – avoids triggering model-side thinking mode
             # that requires reasoning_content on every assistant message.
-            params.pop("stream_options", None)
+            # Disabled to keep per-turn usage; re-enable if it breaks anything.
+            # params.pop("stream_options", None)
 
         # Collect full response while streaming text deltas
         collected_content = ""

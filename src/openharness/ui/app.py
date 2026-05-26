@@ -224,6 +224,31 @@ async def run_print_mode(
     )
     await start_runtime(bundle)
 
+    # Per-session snapshot of opt-in extra fields. Read once here so a settings
+    # change mid-session can't tear the stream-json schema apart. ``frozenset``
+    # for O(1) membership checks on the hot path. See PrintModeSettings.
+    _extra_fields: frozenset[str] = frozenset(
+        bundle.current_settings().print_mode.stream_json_extra_fields
+    )
+
+    def _augment_stream_json_event(obj: dict, event: StreamEvent) -> None:
+        """Inject opt-in extra fields onto a stream-json event dict in place.
+
+        Dispatches on ``obj["type"]`` and each field's stable identifier.
+        When extending PrintModeSettings.stream_json_extra_fields with a new
+        value, add a corresponding branch here. Keeping the dispatch in one
+        helper means new fields cost one edit, not one per renderer branch.
+        """
+        et = obj.get("type")
+        if et == "assistant_complete" and "usage" in _extra_fields:
+            u = getattr(event, "usage", None)
+            if u is not None:
+                obj["usage"] = {
+                    "input_tokens": int(u.input_tokens),
+                    "output_tokens": int(u.output_tokens),
+                }
+        # Future (event_type, field) pairs go here.
+
     collected_text = ""
     events_list: list[dict] = []
 
@@ -246,6 +271,7 @@ async def run_print_mode(
                     sys.stdout.flush()
                 elif output_format == "stream-json":
                     obj = {"type": "assistant_delta", "text": event.text}
+                    _augment_stream_json_event(obj, event)
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
             elif isinstance(event, AssistantTurnComplete):
@@ -254,16 +280,19 @@ async def run_print_mode(
                     sys.stdout.flush()
                 elif output_format == "stream-json":
                     obj = {"type": "assistant_complete", "text": event.message.text.strip()}
+                    _augment_stream_json_event(obj, event)
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
             elif isinstance(event, ToolExecutionStarted):
                 if output_format == "stream-json":
                     obj = {"type": "tool_started", "tool_name": event.tool_name, "tool_input": event.tool_input}
+                    _augment_stream_json_event(obj, event)
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
             elif isinstance(event, ToolExecutionCompleted):
                 if output_format == "stream-json":
                     obj = {"type": "tool_completed", "tool_name": event.tool_name, "output": event.output, "is_error": event.is_error}
+                    _augment_stream_json_event(obj, event)
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
             elif isinstance(event, ErrorEvent):
@@ -271,6 +300,7 @@ async def run_print_mode(
                     print(event.message, file=sys.stderr)
                 elif output_format == "stream-json":
                     obj = {"type": "error", "message": event.message, "recoverable": event.recoverable}
+                    _augment_stream_json_event(obj, event)
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
             elif isinstance(event, CompactProgressEvent):
@@ -284,6 +314,7 @@ async def run_print_mode(
                         "attempt": event.attempt,
                         "message": event.message,
                     }
+                    _augment_stream_json_event(obj, event)
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
             elif isinstance(event, StatusEvent):
@@ -291,6 +322,7 @@ async def run_print_mode(
                     print(event.message, file=sys.stderr)
                 elif output_format == "stream-json":
                     obj = {"type": "status", "message": event.message}
+                    _augment_stream_json_event(obj, event)
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
 

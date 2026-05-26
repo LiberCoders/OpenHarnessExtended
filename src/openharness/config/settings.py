@@ -80,6 +80,26 @@ class PromptFieldSettings(BaseModel):
     mobile_phone_apps: bool = True
 
 
+class PrintModeSettings(BaseModel):
+    """Settings controlling non-interactive ``oh -p ...`` output.
+
+    Only affects the ``stream-json`` output format. ``text`` / ``json``
+    formats are unaffected. The default is empty so existing stream-json
+    consumers see no behavioural change unless they opt in.
+    """
+
+    #: Opt-in field identifiers to include on emitted ``stream-json`` events.
+    #: Unknown values are ignored silently so configs can declare fields a
+    #: future OH version is expected to support without breaking older OH.
+    #:
+    #: Recognised values (extend ``_augment_stream_json_event`` in
+    #: ``openharness.ui.app`` when adding new ones):
+    #:   - ``"usage"``  → adds ``{"input_tokens", "output_tokens"}`` to the
+    #:                    ``assistant_complete`` event, sourced from
+    #:                    ``AssistantTurnComplete.usage``.
+    stream_json_extra_fields: list[str] = Field(default_factory=list)
+
+
 class MemorySettings(BaseModel):
     """Memory system configuration."""
 
@@ -601,6 +621,7 @@ class Settings(BaseModel):
     system_prompt: str | None = None
     permission: PermissionSettings = Field(default_factory=PermissionSettings)
     prompt_fields: PromptFieldSettings = Field(default_factory=PromptFieldSettings)
+    print_mode: PrintModeSettings = Field(default_factory=PrintModeSettings)
     hooks: dict[str, list[HookDefinition]] = Field(default_factory=dict)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)

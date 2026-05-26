@@ -1,3 +1,5 @@
+> This is an extended fork of [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness) — thanks to the upstream authors for the agent core this is built on. We keep pulling in upstream changes as they ship, and add what the base repo hasn't covered yet. Right now that's **mobile GUI agents**: an ADB-driven Android backend with a pluggable GUI-model layer that takes any open-source GUI model. The default adapter targets [Mobile-Agent-v3.5](https://github.com/X-PLUG/MobileAgent/tree/main/Mobile-Agent-v3.5) — download and deploy it yourself. Use it on its own, or pair it with [CLaw-Anything](https://github.com/LiberCoders/CLaw-Anything) to run mixed CLI + GUI tasks.
+
 <h1 align="center">
   <img src="assets/logo.png" alt="OpenHarness" width="64" style="vertical-align: middle;">
   &nbsp;&nbsp;
@@ -36,7 +38,7 @@
   <a href="https://github.com/HKUDS/.github/blob/main/profile/README.md"><img src="https://img.shields.io/badge/WeChat-Group-C5EAB4?style=flat&logo=wechat&logoColor=white" alt="WeChat"></a>
 </p>
 
-One Command (**oh**) to Launch **OpenHarness** and Unlock All Agent Harnesses. 
+One Command (**oh**) to Launch **OpenHarness** and Unlock All Agent Harnesses.
 
 Supports CLI agent integration including OpenClaw, nanobot, Cursor, and more.
 
@@ -181,7 +183,7 @@ OpenHarness is an open-source Python implementation designed for **researchers, 
   - `oh setup` now guides provider selection as workflows instead of exposing raw auth/provider internals
   - Compatible API setup is now profile-scoped, so Anthropic/OpenAI-compatible endpoints can keep separate keys
   - `ohmo` ships as a packaged app with `~/.ohmo` workspace, gateway, bootstrap prompts, and channel config flow
-- **2026-04-01** 🎨 **v0.1.0** — Initial **OpenHarness** open-source release featuring complete Harness architecture: 
+- **2026-04-01** 🎨 **v0.1.0** — Initial **OpenHarness** open-source release featuring complete Harness architecture:
 
 <p align="center">
   <strong>Start here:</strong>
@@ -472,14 +474,14 @@ The heart of the harness. One loop, endlessly composable:
 ```python
 while True:
     response = await api.stream(messages, tools)
-    
+
     if response.stop_reason != "tool_use":
         break  # Model is done
-    
+
     for tool_call in response.tool_uses:
         # Permission check → Hook → Execute → Hook → Result
         result = await harness.execute_tool(tool_call)
-    
+
     messages.append(tool_results)
     # Loop continues — model sees results, decides next action
 ```

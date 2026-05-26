@@ -1,3 +1,5 @@
+> 这是 [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness) 的扩展版本，感谢原仓库作者把底层 agent 基建做出来。我们会持续同步上游的更新，自己主要在原版之上加了**手机 GUI agent** 这一块 —— 底层用 ADB 操作安卓设备，上层留了一个可换的 GUI 模型接口，任何开源 GUI 模型都能接进来。默认对接的是 [Mobile-Agent-v3.5](https://github.com/X-PLUG/MobileAgent/tree/main/Mobile-Agent-v3.5)，自己下载部署即可。可以单独使用，也能配合 [CLaw-Anything](https://github.com/LiberCoders/CLaw-Anything) 跑 CLI + GUI 的混合任务。
+
 # <img src="assets/logo.png" alt="OpenHarness" width="40" style="vertical-align: middle;"> `oh` — OpenHarness 中文说明
 
 <p align="center">
@@ -145,7 +147,7 @@ oh provider add my-endpoint \
   --base-url https://example.com/anthropic
 ```
 
-这一版开始，兼容接口可以按 profile 绑定凭据。  
+这一版开始，兼容接口可以按 profile 绑定凭据。
 也就是说，`Kimi`、`GLM`、`MiniMax` 这类 Anthropic-compatible 后端，不需要再共用一把全局 `anthropic` key。
 
 ---

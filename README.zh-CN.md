@@ -1,4 +1,6 @@
-> 这是 [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness) 的扩展版本，感谢原仓库作者把底层 agent 基建做出来。我们会持续同步上游的更新，自己主要在原版之上加了**手机 GUI agent** 这一块 —— 底层用 ADB 操作安卓设备，上层留了一个可换的 GUI 模型接口，任何开源 GUI 模型都能接进来。默认对接的是 [Mobile-Agent-v3.5](https://github.com/X-PLUG/MobileAgent/tree/main/Mobile-Agent-v3.5)，自己下载部署即可。可以单独使用，也能配合 [CLaw-Anything](https://github.com/LiberCoders/CLaw-Anything) 跑 CLI + GUI 的混合任务。
+> 本仓库是 [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness) 的扩展分支，为方便起见简称为 OH-Ext。我们由衷感谢 OpenHarness 作者们的出色工作，并会持续将本仓库与上游的最新特性和修复保持同步，同时在其之上加入一些贴合自身需求的定制功能。
+> 在本分支中，我们对 OpenHarness 进行了扩展，使其能够与**手机 GUI agent** 协同工作：底层是基于 ADB 驱动的安卓后端，上层则是一个可插拔的 GUI 模型接口层。当前实现已支持运行 [Mobile-Agent-v3.5](https://github.com/X-PLUG/MobileAgent/tree/main/Mobile-Agent-v3.5)，只需自行下载并部署模型，配置妥当后即可在 OH-Ext 中调用（具体配置可参考 [settings.example.json](settings.example.json)）。
+> OH-Ext 既可以独立使用，也可以与我们的 [CLaw-Anything](https://github.com/LiberCoders/CLaw-Anything) 项目配合使用，用于在涉及 CLI 与 GUI 混合操作的 *Claw* 任务上评测模型。
 
 # <img src="assets/logo.png" alt="OpenHarness" width="40" style="vertical-align: middle;"> `oh` — OpenHarness 中文说明
 

@@ -1,5 +1,7 @@
 > This is an extended fork of [HKUDS/OpenHarness](https://github.com/HKUDS/OpenHarness), abbreviated as OH-Ext for convenience. We deeply appreciate the great work of the OpenHarness authors, and we will try to keep this repository synchronized with the latest OpenHarness features and fixes, while adding customizations tailored to our own needs.
+>
 > In this fork, we extend OpenHarness to enable collaboration with **mobile GUI agents**: an ADB-driven Android backend with a pluggable GUI-model layer. The current implementation supports running [Mobile-Agent-v3.5](https://github.com/X-PLUG/MobileAgent/tree/main/Mobile-Agent-v3.5). Once the model is downloaded and deployed, it can be invoked from OH-Ext with proper configuration (refer to [settings.example.json](settings.example.json) for an example).
+>
 > OH-Ext can be used on its own, or paired with our [CLaw-Anything](https://github.com/LiberCoders/CLaw-Anything) project to evaluate models on *Claw* tasks that involve both CLI and GUI usage.
 
 <h1 align="center">

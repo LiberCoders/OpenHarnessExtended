@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from openharness.extended.experts.mobile_gui.backends.gui_plus_backend import GuiPlusBackend
-from openharness.extended.experts.mobile_gui.types import GuiAction, Observation
+from openharness.extended.experts.mobile_gui.types import ActionType, GuiAction, Observation
 
 
 def _backend() -> GuiPlusBackend:
@@ -22,8 +22,10 @@ def test_parse_swipe_accepts_coordinate1_and_coordinate2() -> None:
 <tool_call>
 {"name": "mobile_use", "arguments": {"action": "swipe", "coordinate1": [100, 200], "coordinate2": [300, 400]}}
 </tool_call>"""
-    act = b.parse_action(text)
-    assert act.action == "swipe"
+    actions = b.parse_action(text)
+    assert len(actions) == 1
+    act = actions[0]
+    assert act.action == ActionType.SWIPE
     assert act.x == 100 and act.y == 200 and act.x2 == 300 and act.y2 == 400
 
 
@@ -36,8 +38,10 @@ Action: tap
 <tool_call>
 {"name": "mobile_use", "arguments": {"action": "click", "coordinate": [500, 500]}}
 </tool_call>"""
-    act = b.parse_action(text)
-    assert act.action == "click" and act.x == 500 and act.y == 500
+    actions = b.parse_action(text)
+    assert len(actions) == 1
+    act = actions[0]
+    assert act.action == ActionType.CLICK and act.x == 500 and act.y == 500
 
 
 def test_parse_home_back_actions() -> None:
@@ -50,8 +54,8 @@ def test_parse_home_back_actions() -> None:
 <tool_call>
 {"name":"mobile_use","arguments":{"action":"back"}}
 </tool_call>"""
-    assert b.parse_action(home).action == "home"
-    assert b.parse_action(back).action == "back"
+    assert b.parse_action(home)[0].action == ActionType.HOME
+    assert b.parse_action(back)[0].action == ActionType.BACK
 
 
 def test_adapt_swipe_maps_both_endpoints() -> None:
@@ -70,8 +74,10 @@ def test_adapt_swipe_maps_both_endpoints() -> None:
         f.write(raw)
         path = f.name
     try:
-        act = GuiAction(action="swipe", x=1000, y=1000, x2=0, y2=0, seconds=0.5)
-        adapted = b.adapt_action(action=act, observation=Observation(screenshot_path=path))
+        act = GuiAction(action=ActionType.SWIPE, x=1000, y=1000, x2=0, y2=0, seconds=0.5)
+        adapted_list = b.adapt_action(actions=[act], observation=Observation(screenshot_path=path))
+        assert len(adapted_list) == 1
+        adapted = adapted_list[0]
         assert adapted.x is not None and adapted.y is not None
         assert adapted.x2 is not None and adapted.y2 is not None
         assert adapted.x >= adapted.x2

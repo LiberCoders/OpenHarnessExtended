@@ -83,7 +83,8 @@ def build_step_event(
         "step_json_path": _readable_path(step_json_abs, base_dir),
         "reasoning_content": _clip_text(step_payload.get("reasoning_content", "")),
         "raw_response": _clip_text(step_payload.get("raw_response", "")),
-        "parsed_action": step_payload.get("parsed_action"),
-        "adapted_action": step_payload.get("adapted_action"),
+        "parsed_actions": step_payload.get("parsed_actions"),
+        "adapted_actions": step_payload.get("adapted_actions"),
+        "action_results": step_payload.get("action_results"),
     }
 

@@ -5,51 +5,86 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
-from openharness.extended.experts.mobile_gui.device.base import MobileDeviceDriver
+from openharness.extended.experts.mobile_gui.device.base import MobileDeviceDriver, UnsupportedActionError
 from openharness.extended.experts.mobile_gui.device.results import DeviceActionResult
-from openharness.extended.experts.mobile_gui.types import GuiAction
+from openharness.extended.experts.mobile_gui.types import ActionType, GuiAction, GuiActionResult
 
 ActionRunner = Callable[[GuiAction], Awaitable[tuple[str, DeviceActionResult]]]
 
 
 class ActionExecutor:
-    """Execute normalized GUI actions on the target device."""
+    """Execute normalized GUI actions on the target device.
+
+    The dispatch table maps each device-primitive ``ActionType`` to a driver
+    call — essentially identity, since the canonical vocabulary mirrors the
+    driver interface. All semantic mapping (name remapping, composites,
+    coordinate normalization) happens upstream in the backend.
+    """
 
     def __init__(self, *, driver: MobileDeviceDriver) -> None:
         self._driver = driver
-        self._dispatch: dict[str, ActionRunner] = {
-            "click": self._run_click,
-            "wait": self._run_wait,
-            "long_press": self._run_long_press,
-            "swipe": self._run_swipe,
-            "type": self._run_type,
-            "open": self._run_open,
-            "home": self._run_home,
-            "back": self._run_back,
-            "key": self._run_key,
-            "interact": self._run_interact,
+        self._dispatch: dict[ActionType, ActionRunner] = {
+            ActionType.CLICK: self._run_click,
+            ActionType.WAIT: self._run_wait,
+            ActionType.LONG_PRESS: self._run_long_press,
+            ActionType.SWIPE: self._run_swipe,
+            ActionType.TYPE: self._run_type,
+            ActionType.OPEN: self._run_open,
+            ActionType.HOME: self._run_home,
+            ActionType.BACK: self._run_back,
+            ActionType.KEY: self._run_key,
         }
 
-    async def execute(self, action: GuiAction, context: MobileGuiContext) -> None:
-        if action.action == "terminate":
-            context.last_action = f"terminate({action.status or 'success'})"
-            context.last_message = action.message
-            context.done = True
-            return
+    async def run(
+        self, actions: list[GuiAction], context: MobileGuiContext
+    ) -> list[GuiActionResult]:
+        """Execute actions in order and return per-action results.
 
-        runner = self._dispatch.get(action.action)
-        if runner is None:
-            context.last_action = f"{action.action}:unsupported"
-            context.last_message = f"unsupported action: {action.action}"
-            raise RuntimeError(context.last_message)
+        Failure handling:
+        - **Hard failure → raises** (the loop terminates the expert): a driver
+          primitive the transport doesn't implement (``UnsupportedActionError``),
+          an ``interact`` request (the worker can't pause for manual UI), or a
+          malformed action.
+        - **Soft failure** — a device command ran but reported ``ok=False``:
+          recorded into ``context.last_results``; the remaining actions in *this*
+          plan are skipped and we return **without raising**, so the backend can
+          observe the result and retry on the next step.
+        """
+        results: list[GuiActionResult] = []
+        for action in actions:
+            if action.action == ActionType.TERMINATE:
+                # Don't fabricate a verdict: a terminate without a status is
+                # "unspecified", matching the loop's expert_done_unspecified —
+                # ending without a status is NOT the same as succeeding.
+                context.last_action = f"terminate({action.status or 'unspecified'})"
+                context.last_message = action.message
+                context.done = True
+                break
+            if action.action == ActionType.INTERACT:
+                hint = (action.text or action.message or "").strip() or "operator assistance"
+                raise UnsupportedActionError(
+                    "interact",
+                    self._driver.transport_name,
+                    detail=(
+                        f"automated worker cannot pause for manual UI; hint={hint!r}. "
+                        "Complete the step on the device and re-run or extend the worker channel."
+                    ),
+                )
+            runner = self._dispatch.get(action.action)
+            if runner is None:
+                raise UnsupportedActionError(str(action.action), self._driver.transport_name)
 
-        action_desc, result = await runner(action)
-        context.last_action = action_desc if result.ok else f"{action_desc}:failed"
-        context.last_message = _format_result_message(
-            action_desc=action_desc, result=result, action_message=action.message
-        )
-        if not result.ok:
-            raise RuntimeError(context.last_message)
+            action_desc, result = await runner(action)
+            results.append(GuiActionResult(action=action, device_result=result))
+            context.last_action = action_desc if result.ok else f"{action_desc}:failed"
+            context.last_message = _format_result_message(
+                action_desc=action_desc, result=result, action_message=action.message
+            )
+            if not result.ok:
+                break  # soft failure: stop this plan, but do NOT raise
+
+        context.last_results = results
+        return results
 
     async def _run_click(self, action: GuiAction) -> tuple[str, DeviceActionResult]:
         if action.x is None or action.y is None:
@@ -98,13 +133,6 @@ class ActionExecutor:
         if action.keycode is None:
             raise RuntimeError("key action requires keycode")
         return f"key({action.keycode})", await self._driver.keyevent(action.keycode)
-
-    async def _run_interact(self, action: GuiAction) -> tuple[str, DeviceActionResult]:
-        hint = (action.text or action.message or "").strip() or "operator assistance"
-        raise RuntimeError(
-            f"interact: automated worker cannot pause for manual UI; hint={hint!r}. "
-            "Complete the step on the device and re-run or extend the worker channel."
-        )
 
 
 def _format_result_message(

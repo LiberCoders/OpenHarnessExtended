@@ -9,24 +9,32 @@ from pathlib import Path
 from openharness.extended.experts.mobile_gui.device.results import DeviceActionResult, DeviceCommandResult
 
 
-def unsupported_action_result(action: str, transport: str) -> DeviceActionResult:
-    msg = f"action {action!r} is not supported by transport={transport}"
-    return DeviceActionResult(
-        ok=False,
-        results=[
-            DeviceCommandResult(
-                command=f"{transport}:{action}",
-                exit_code=-1,
-                stdout="",
-                stderr=msg,
-                ok=False,
-            )
-        ],
-    )
+class UnsupportedActionError(RuntimeError):
+    """Raised when a transport does not implement a requested driver primitive.
+
+    This is a *hard* failure: the loop terminates the expert. It is deliberately
+    distinct from a driver method that runs a command the device rejects
+    (``DeviceActionResult.ok is False``) — that is a *soft* failure the backend
+    may observe and recover from.
+    """
+
+    def __init__(self, action: str, transport: str, detail: str = "") -> None:
+        msg = f"action {action!r} is not supported by transport={transport}"
+        if detail:
+            msg = f"{msg}: {detail}"
+        super().__init__(msg)
+        self.action = action
+        self.transport = transport
 
 
 class MobileDeviceDriver(ABC):
-    """Base interface for all mobile device transports."""
+    """Base interface for all mobile device transports.
+
+    The methods here are the canonical, transport-agnostic primitive vocabulary
+    (kept in lockstep with ``ActionType``). ``adb`` implements all of them;
+    thinner transports (e.g. ``hdc``) implement a subset and inherit the
+    defaults below, which raise ``UnsupportedActionError`` — a hard failure.
+    """
 
     transport_name: str = "unknown"
 
@@ -43,27 +51,27 @@ class MobileDeviceDriver(ABC):
         raise NotImplementedError
 
     async def long_press(self, x: int, y: int, duration_ms: int | None = None) -> DeviceActionResult:
-        return unsupported_action_result("long_press", self.transport_name)
+        raise UnsupportedActionError("long_press", self.transport_name)
 
     async def swipe(
         self, x1: int, y1: int, x2: int, y2: int, duration_ms: int | None = None
     ) -> DeviceActionResult:
-        return unsupported_action_result("swipe", self.transport_name)
+        raise UnsupportedActionError("swipe", self.transport_name)
 
     async def type_text(self, text: str) -> DeviceActionResult:
-        return unsupported_action_result("type", self.transport_name)
+        raise UnsupportedActionError("type", self.transport_name)
 
     async def open_app(self, app_or_package: str) -> DeviceActionResult:
-        return unsupported_action_result("open", self.transport_name)
+        raise UnsupportedActionError("open", self.transport_name)
 
     async def keyevent(self, keycode: int) -> DeviceActionResult:
-        return unsupported_action_result("key", self.transport_name)
+        raise UnsupportedActionError("key", self.transport_name)
 
     async def home(self) -> DeviceActionResult:
-        return unsupported_action_result("home", self.transport_name)
+        raise UnsupportedActionError("home", self.transport_name)
 
     async def back(self) -> DeviceActionResult:
-        return unsupported_action_result("back", self.transport_name)
+        raise UnsupportedActionError("back", self.transport_name)
 
     async def wait(self, seconds: float) -> DeviceActionResult:
         actual = max(0.0, float(seconds))

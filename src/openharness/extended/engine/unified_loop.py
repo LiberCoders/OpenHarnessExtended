@@ -16,12 +16,13 @@ from openharness.extended.experts.mobile_gui.action_executor import ActionExecut
 from openharness.extended.experts.mobile_gui.backends.registry import resolve_gui_backend
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
 from openharness.extended.experts.mobile_gui.device import create_mobile_driver
+from openharness.extended.experts.mobile_gui.device.base import UnsupportedActionError
 from openharness.extended.experts.mobile_gui.device.package_aliases import register_task_apps
 from openharness.extended.experts.mobile_gui.perception import MobilePerception
 from openharness.extended.experts.mobile_gui.reasoning import MobileGuiReasoning
 from openharness.extended.experts.mobile_gui.state_store import MobileGuiStateStore
 from openharness.extended.experts.mobile_gui.status_digest import build_status_digest, build_step_event
-from openharness.extended.experts.mobile_gui.types import GuiAction
+from openharness.extended.experts.mobile_gui.types import ActionType
 from openharness.extended.channel import connect_worker_channel
 from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
 
@@ -29,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 FALLBACK_EXPERT_TYPE_SLUG = "unspecified"
 _DEFAULT_POST_ACTION_SETTLE_SECONDS = 0.35
+# Consecutive soft failures (device-reported ok=False) tolerated before the
+# loop force-terminates the expert. Hard failures terminate immediately.
+MAX_CONSECUTIVE_SOFT_FAILURES = 3
+# Action types that don't touch the screen — no settle delay needed afterwards.
+_NON_DEVICE_ACTIONS = frozenset({ActionType.WAIT, ActionType.TERMINATE, ActionType.INTERACT})
 
 WORKER_IMPLEMENTED_EXPERT_TYPES: frozenset[str] = frozenset({"mobile_gui"})
 
@@ -143,6 +149,7 @@ class ExpertLoopPack:
         cfg = self.config
         status = "running"
         exit_reason = ""
+        consecutive_soft_failures = 0
         logger.info("%s loop start: expert_id=%s max_steps=%s", cfg.expert_type, self.expert_id, cfg.max_steps)
 
         for step in range(1, max(1, cfg.max_steps) + 1):
@@ -165,13 +172,13 @@ class ExpertLoopPack:
             observation = await self.perception.observe(self.context)
             self.context.last_screenshot = observation.screenshot_path
             outcome = await self.reasoning.think(self.context, observation)
-            action = outcome.adapted_action
-            await self.executor.execute(action, self.context)
-            if (
-                not self.context.done
-                and action.action != "wait"
-                and self.post_action_settle_seconds > 0
-            ):
+            actions = outcome.adapted_actions
+            # A driver primitive the transport can't do raises out of run() and
+            # is handled as a hard failure by the outer except (terminate).
+            results = await self.executor.run(actions, self.context)
+
+            did_device_action = any(a.action not in _NON_DEVICE_ACTIONS for a in actions)
+            if not self.context.done and did_device_action and self.post_action_settle_seconds > 0:
                 await asyncio.sleep(self.post_action_settle_seconds)
 
             step_payload = {
@@ -180,8 +187,9 @@ class ExpertLoopPack:
                 "screenshot_path": self.context.last_screenshot,
                 "raw_response": outcome.raw_response,
                 "reasoning_content": outcome.reasoning_content,
-                "parsed_action": _action_to_dict(outcome.parsed_action),
-                "adapted_action": _action_to_dict(outcome.adapted_action),
+                "parsed_actions": [a.to_dict() for a in outcome.parsed_actions],
+                "adapted_actions": [a.to_dict() for a in outcome.adapted_actions],
+                "action_results": [r.to_dict() for r in results],
                 "model_request": _truncate_model_request(outcome.model_request),
             }
             self.store.save_step(step, step_payload)
@@ -194,7 +202,9 @@ class ExpertLoopPack:
                 self.context.last_message,
             )
             if self.context.done:
-                declared = (action.status or "").strip().lower()
+                # The backend declared completion via a terminate action.
+                term = next((a for a in actions if a.action == ActionType.TERMINATE), None)
+                declared = (term.status or "").strip().lower() if term and term.status else ""
                 if declared == "success":
                     status, exit_reason = "completed", "expert_completed"
                 elif declared == "failure":
@@ -208,6 +218,16 @@ class ExpertLoopPack:
                     # via last_action/step action.status, so the reason stays
                     # generic rather than echoing it.
                     status, exit_reason = "stopped", "expert_done_others"
+            elif any(not r.device_result.ok for r in results):
+                # Soft failure: a device command reported ok=False but didn't
+                # crash. Let the backend retry next step; trip a breaker after
+                # MAX_CONSECUTIVE_SOFT_FAILURES in a row.
+                consecutive_soft_failures += 1
+                if consecutive_soft_failures >= MAX_CONSECUTIVE_SOFT_FAILURES:
+                    self.context.done = True
+                    status, exit_reason = "failed", "expert_failed_repeated_action_errors"
+            else:
+                consecutive_soft_failures = 0
             # Per-step trajectory (text + screenshot path) so the leader can replay
             # the full execution; the terminal/summary state still rides on "status".
             channel.send_to_leader(
@@ -371,7 +391,11 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
         status = "failed"
         # Distinguish a crash during init (auth/model/backend config) from one
         # mid-run; both are expert-agnostic and carry detail in error_message.
-        exit_reason = "error" if pack is not None else "bootstrap_error"
+        if isinstance(exc, UnsupportedActionError) and pack is not None:
+            # Hard failure: a backend asked for a primitive this transport can't do.
+            exit_reason = "expert_unsupported_action"
+        else:
+            exit_reason = "error" if pack is not None else "bootstrap_error"
         # Always capture the specific reason, even on bootstrap failures
         # (build_runtime / start_runtime / pack build, incl. backend __init__)
         # where ``pack`` is still None. The finally block forwards this to the
@@ -481,21 +505,6 @@ def run_expert_worker_entry(config: dict, downlink_queue, uplink_queue) -> None:
     parsed = ExpertRunConfig.from_worker_dict(config, expert_type=expert_type)
     exit_code = asyncio.run(_run_expert_loop(parsed, worker_channel))
     raise SystemExit(exit_code)
-
-
-def _action_to_dict(action: GuiAction) -> dict:
-    return {
-        "action": action.action,
-        "x": action.x,
-        "y": action.y,
-        "x2": action.x2,
-        "y2": action.y2,
-        "seconds": action.seconds,
-        "status": action.status,
-        "message": action.message,
-        "text": action.text,
-        "keycode": action.keycode,
-    }
 
 
 def _truncate_model_request(payload: object) -> object:

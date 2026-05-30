@@ -18,13 +18,25 @@ class GuiInferenceBackend(ABC):
         """Return raw text, request payload, and reasoning content."""
 
     @abstractmethod
-    def parse_action(self, response_text: str) -> GuiAction:
-        """Parse backend response text into an executable action."""
+    def parse_action(self, response_text: str) -> list[GuiAction]:
+        """Parse backend response text into one or more executable actions.
+
+        Returns a list to allow composite actions (e.g. click + type) and
+        arbitrary name remapping (e.g. a model 'click' that is really a swipe).
+        The mapping from the model's native action space onto the canonical
+        ``ActionType`` vocabulary lives entirely here.
+        """
         raise NotImplementedError
 
-    def adapt_action(self, *, action: GuiAction, observation: Observation) -> GuiAction:
-        """Backend-specific action post-processing hook."""
-        return action
+    def adapt_action(
+        self, *, actions: list[GuiAction], observation: Observation
+    ) -> list[GuiAction]:
+        """Backend-specific post-processing (e.g. coordinate normalization).
+
+        Must return actions whose coordinates are device pixels — the executor
+        passes them straight to the driver. Default is a no-op pass-through.
+        """
+        return actions
 
     def close(self) -> None:
         """Optional cleanup hook."""

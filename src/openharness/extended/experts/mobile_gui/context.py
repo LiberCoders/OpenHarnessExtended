@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from openharness.extended.experts.mobile_gui.types import GuiActionResult
 
 
 @dataclass
@@ -23,4 +25,8 @@ class MobileGuiContext:
     last_action: str = ""
     last_message: str = ""
     last_screenshot: str = ""
+    # Structured results of the most recent step's actions, set by the executor.
+    # A backend may read these in its next infer() to react to soft failures
+    # (per-command stdout/stderr/exit_code) — using them is the backend's choice.
+    last_results: list[GuiActionResult] = field(default_factory=list)
 

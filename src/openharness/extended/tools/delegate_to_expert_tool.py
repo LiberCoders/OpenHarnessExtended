@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import multiprocessing as mp
 import os
@@ -161,21 +160,6 @@ class DelegateToExpertTool(BaseTool):
             encoding="utf-8",
         )
 
-    @staticmethod
-    def _write_start_failure_result(state_root: Path, *, expert_id: str, exit_code: int | None) -> None:
-        payload = {
-            "expert_id": expert_id,
-            "status": "failed",
-            "last_action": "terminate(start_failed)",
-            "message": f"failed_to_start(exit_code={exit_code})",
-            "last_screenshot": "",
-            "steps": 0,
-        }
-        (state_root / "result.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
     def _spawn_worker(self, *, config: dict, channel) -> Any:
         if os.name == "nt":
             # In React-TUI backend mode on Windows, the backend host itself is a
@@ -265,51 +249,31 @@ class DelegateToExpertTool(BaseTool):
         )
         registry = get_channel_registry()
         registry.register(handle)
-        started = False
-        startup_deadline = asyncio.get_running_loop().time() + 3.0
-        while asyncio.get_running_loop().time() < startup_deadline:
-            registry.refresh(handle)
-            if handle.last_action.startswith("startup:"):
-                started = True
-                break
-            if not process.is_alive():
-                break
-            await asyncio.sleep(0.05)
-        if not process.is_alive():
-            exit_code = process.exitcode
-            self._write_start_failure_result(
-                state_root,
-                expert_id=expert_id,
-                exit_code=exit_code,
-            )
-            handle.status = "failed"
-            channel.close()
-            return ToolResult(
-                output=(
-                    f"failed to start expert {expert_id}: process exited early "
-                    f"(exit_code={exit_code})."
-                ),
-                is_error=True,
-                metadata={
-                    "expert_id": expert_id,
-                    "task_id": expert_id,
-                    "expert_type": arguments.expert_type,
-                    "state_root": state_root_str,
-                },
-            )
-        if not started:
-            # Slow startup is common on Windows; keep the worker alive and let
-            # get_expert_status observe eventual progress/failure.
-            handle.last_message = "startup_not_confirmed_yet"
 
-        startup_note = ""
-        if not started:
-            startup_note = " Startup heartbeat not observed yet; check get_expert_status shortly."
+        # Fire-and-forget: the worker process is spawned and we return immediately —
+        # no waiting on startup. delegate already knows everything the leader needs
+        # to interpret later step paths (task + both roots), so it states the path
+        # convention right here instead of round-tripping through the worker uplink.
+        # Process liveness and any bootstrap failure are observed later via
+        # get_expert_status (process stopped + synthesized result.json).
+        path_note = (
+            "step file paths are cwd-relative (to working_dir) when under it, else absolute; "
+            "pass them to Read as-is"
+        )
+        startup_block = (
+            "\nStartup info (path convention for this expert's step artifacts):\n"
+            f"  task: {arguments.task}\n"
+            f"  working_dir: {Path(context.cwd).resolve()}\n"
+            f"  state_root: {state_root_str}\n"
+            f"  max_steps: {arguments.max_steps}\n"
+            f"  note: {path_note}"
+        )
         return ToolResult(
             output=(
                 f"Delegated expert {expert_id} "
                 f"(expert_id={expert_id}, task_id={expert_id}, pid={process.pid}). "
-                f"Use get_expert_status/send_to_expert for experts.{startup_note}"
+                f"Use get_expert_status/send_to_expert for experts."
+                f"{startup_block}"
             ),
             metadata={
                 "expert_id": expert_id,

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import gc
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from openharness.extended.channel.ipc import LeaderQueueChannel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -24,6 +27,12 @@ class ExpertHandle:
     last_message: str = ""
     last_screenshot: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Full per-step trajectory pushed by the worker over the channel. ``events``
+    # accumulates every step; ``events_cursor`` marks how many have already been
+    # delivered to the leader (main conversation), so each query returns only the
+    # unseen tail.
+    events: list[dict[str, Any]] = field(default_factory=list)
+    events_cursor: int = 0
 
 
 class ChannelRegistry:
@@ -63,14 +72,37 @@ class ChannelRegistry:
 
     def refresh(self, handle: ExpertHandle) -> ExpertHandle:
         for message in handle.channel.read_for_leader():
-            if message.kind != "status":
-                continue
-            payload = message.payload
-            handle.status = str(payload.get("status") or handle.status)
-            handle.last_action = str(payload.get("last_action") or handle.last_action)
-            handle.last_message = str(payload.get("message") or handle.last_message)
-            handle.last_screenshot = str(payload.get("last_screenshot") or handle.last_screenshot)
+            if message.kind == "step":
+                # Accumulate (never collapse) so the full trajectory is preserved
+                # for incremental delivery via take_new_events().
+                handle.events.append(dict(message.payload))
+            elif message.kind == "status":
+                payload = message.payload
+                handle.status = str(payload.get("status") or handle.status)
+                handle.last_action = str(payload.get("last_action") or handle.last_action)
+                handle.last_message = str(payload.get("message") or handle.last_message)
+                handle.last_screenshot = str(payload.get("last_screenshot") or handle.last_screenshot)
+            else:
+                # Unknown uplink kind: NOT surfaced to the main conversation. Log it
+                # (rather than silently dropping) so a newly-added worker message
+                # type without a handler here is visible and easy to wire up.
+                logger.warning(
+                    "expert %s: unhandled uplink message kind=%r dropped — not delivered to the "
+                    "main conversation; add a branch in ChannelRegistry.refresh to surface it.",
+                    handle.expert_id,
+                    message.kind,
+                )
         return handle
+
+    def take_new_events(self, handle: ExpertHandle) -> list[dict[str, Any]]:
+        """Return step events not yet delivered to the leader, advancing the cursor.
+
+        Once returned, events are considered consumed (placed into the main
+        conversation's context) and are never handed out again.
+        """
+        new_events = handle.events[handle.events_cursor:]
+        handle.events_cursor = len(handle.events)
+        return new_events
 
     def send_downlink(self, handle: ExpertHandle, *, kind: str, payload: dict[str, Any]) -> None:
         handle.channel.send_to_worker(kind=kind, payload=payload)

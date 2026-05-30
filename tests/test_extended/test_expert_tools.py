@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -233,8 +234,8 @@ async def test_query_and_send_tools_use_channel_registry(tmp_path: Path, monkeyp
         ToolExecutionContext(cwd=tmp_path),
     )
     assert query_result.is_error is False
-    assert "channel_status=running" in query_result.output
-    assert "process_status=running" in query_result.output
-    assert "last_action=wait(1.0)" in query_result.output
+    payload = json.loads(query_result.output)
+    assert payload["process_status"] == "running"
+    assert payload["last_action"] == "wait(1.0)"
     worker.close()
 

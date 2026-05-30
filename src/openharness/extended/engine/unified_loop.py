@@ -20,7 +20,7 @@ from openharness.extended.experts.mobile_gui.device.package_aliases import regis
 from openharness.extended.experts.mobile_gui.perception import MobilePerception
 from openharness.extended.experts.mobile_gui.reasoning import MobileGuiReasoning
 from openharness.extended.experts.mobile_gui.state_store import MobileGuiStateStore
-from openharness.extended.experts.mobile_gui.status_digest import build_status_digest
+from openharness.extended.experts.mobile_gui.status_digest import build_status_digest, build_step_event
 from openharness.extended.experts.mobile_gui.types import GuiAction
 from openharness.extended.channel import connect_worker_channel
 from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
@@ -131,10 +131,18 @@ class ExpertLoopPack:
     backend: Any | None
     post_action_settle_seconds: float = 0.0
 
-    async def run_steps(self, channel) -> str:
-        """Generic max_steps loop: downlink, observe, think, act, persist, status uplink."""
+    async def run_steps(self, channel) -> tuple[str, str]:
+        """Generic max_steps loop: downlink, observe, think, act, persist, status uplink.
+
+        Returns ``(status, exit_reason)``. ``exit_reason`` is a generic,
+        expert-agnostic classification of *why* the loop ended — computed from
+        loop-level signals (context.done, action.status, step exhaustion) rather
+        than any expert's own last_action vocabulary, so it stays meaningful when
+        a different expert type reuses this loop.
+        """
         cfg = self.config
         status = "running"
+        exit_reason = ""
         logger.info("%s loop start: expert_id=%s max_steps=%s", cfg.expert_type, self.expert_id, cfg.max_steps)
 
         for step in range(1, max(1, cfg.max_steps) + 1):
@@ -150,7 +158,8 @@ class ExpertLoopPack:
                     self.context.last_action = "terminate(external)"
                     self.context.last_message = str(message.payload.get("message") or "terminated by leader")
             if self.context.done:
-                status = "killed"
+                status = "stopped"
+                exit_reason = "expert_killed_by_leader"
                 break
 
             observation = await self.perception.observe(self.context)
@@ -185,13 +194,42 @@ class ExpertLoopPack:
                 self.context.last_message,
             )
             if self.context.done:
-                status = "completed" if (action.status or "success") == "success" else "failed"
+                declared = (action.status or "").strip().lower()
+                if declared == "success":
+                    status, exit_reason = "completed", "expert_completed"
+                elif declared == "failure":
+                    status, exit_reason = "failed", "expert_failed"
+                elif not declared:
+                    # Expert ended but gave no verdict — don't claim success.
+                    status, exit_reason = "stopped", "expert_done_unspecified"
+                else:
+                    # Expert ended with a non-standard status (e.g. it wants user
+                    # interaction). The raw value is already visible to the leader
+                    # via last_action/step action.status, so the reason stays
+                    # generic rather than echoing it.
+                    status, exit_reason = "stopped", "expert_done_others"
+            # Per-step trajectory (text + screenshot path) so the leader can replay
+            # the full execution; the terminal/summary state still rides on "status".
+            channel.send_to_leader(
+                "step",
+                build_step_event(
+                    step_payload,
+                    last_action=self.context.last_action,
+                    status=status,
+                    state_root=self.store.root,
+                    base_dir=cfg.cwd,
+                ),
+            )
             channel.send_to_leader("status", build_status_digest(self.context, status=status))
             if self.context.done:
                 break
         else:
-            status = "completed"
-        return status
+            # Loop hit the step ceiling before the agent declared done — the task
+            # is NOT completed, only truncated. "stopped" = ended without a
+            # success/failure verdict (shared with the no/other-verdict cases).
+            status = "stopped"
+            exit_reason = "max_steps_reached"
+        return status, exit_reason
 
 
 def build_expert_loop_pack(
@@ -290,6 +328,7 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
     bundle = None
     pack: ExpertLoopPack | None = None
     status = "running"
+    exit_reason = ""
     error_message = ""
     try:
         if config.expert_type not in WORKER_IMPLEMENTED_EXPERT_TYPES:
@@ -326,10 +365,13 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
             }
         )
 
-        status = await pack.run_steps(channel)
+        status, exit_reason = await pack.run_steps(channel)
 
     except BaseException as exc:
         status = "failed"
+        # Distinguish a crash during init (auth/model/backend config) from one
+        # mid-run; both are expert-agnostic and carry detail in error_message.
+        exit_reason = "error" if pack is not None else "bootstrap_error"
         # Always capture the specific reason, even on bootstrap failures
         # (build_runtime / start_runtime / pack build, incl. backend __init__)
         # where ``pack`` is still None. The finally block forwards this to the
@@ -358,7 +400,7 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
         # be written and get_expert_status would only show a generic
         # "worker_stopped_without_result". Create the store at the canonical
         # state root so the specific reason lands where the leader reads it.
-        if st is None and status not in {"completed", "killed"}:
+        if st is None and status not in {"completed", "stopped"}:
             try:
                 st = MobileGuiStateStore(get_data_dir() / "extended" / "experts" / expert_id)
             except Exception:
@@ -368,6 +410,7 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
                 {
                     "expert_id": expert_id,
                     "status": status,
+                    "exit_reason": exit_reason or "unknown",
                     "last_action": getattr(ctx, "last_action", "") if ctx else "terminate(bootstrap_failure)",
                     "message": getattr(ctx, "last_message", "") if ctx else error_message,
                     "last_screenshot": getattr(ctx, "last_screenshot", "") if ctx else "",
@@ -409,7 +452,10 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
                 await close_runtime(bundle)
             except Exception:
                 pass
-    return 0 if status in {"completed", "killed"} else 1
+    # completed/stopped are clean loop conclusions (no crash; killed folds into
+    # stopped); only failures/errors exit non-zero. The task outcome itself lives
+    # in result.status.
+    return 0 if status in {"completed", "stopped"} else 1
 
 
 def run_expert_worker_entry(config: dict, downlink_queue, uplink_queue) -> None:

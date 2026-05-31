@@ -13,6 +13,9 @@ from openharness.extended.experts.mobile_gui.device.results import DeviceActionR
 _MIN_GESTURE_DURATION_MS = 50
 _DEFAULT_LONG_PRESS_MS = 800
 _DEFAULT_SWIPE_MS = 800
+# Drag defaults longer than swipe so the gesture reads as a deliberate drag
+# rather than a flick (also gives draganddrop's grab phase room).
+_DEFAULT_DRAG_MS = 1000
 _IME_SWITCH_DELAY_SECONDS = 0.1
 
 
@@ -108,8 +111,22 @@ class AdbMobileDeviceDriver(MobileDeviceDriver):
         result = await self._run_shell(f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {d}")
         return DeviceActionResult(ok=result.ok, results=[result])
 
+    async def drag(
+        self, x1: int, y1: int, x2: int, y2: int, duration_ms: int | None = None
+    ) -> DeviceActionResult:
+        # `input draganddrop` emits the long-press-then-move sequence apps need to
+        # recognize a drag. It's Android 8.0+ only; on older devices the command
+        # errors and surfaces as a soft failure for the backend to handle.
+        d = int(duration_ms) if duration_ms is not None else _DEFAULT_DRAG_MS
+        d = max(_MIN_GESTURE_DURATION_MS, d)
+        result = await self._run_shell(f"input draganddrop {int(x1)} {int(y1)} {int(x2)} {int(y2)} {d}")
+        return DeviceActionResult(ok=result.ok, results=[result])
+
     async def type_text(self, text: str) -> DeviceActionResult:
-        """Input text via ADB Keyboard broadcast (requires com.android.adbkeyboard on device)."""
+        """Input text via ADB Keyboard broadcast (requires com.android.adbkeyboard on device).
+
+        Targets whichever field currently has focus (no coordinates).
+        """
         results: list[DeviceCommandResult] = []
         escaped = (
             text.replace("\\", "\\\\")

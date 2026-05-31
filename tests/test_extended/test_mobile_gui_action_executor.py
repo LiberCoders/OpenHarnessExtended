@@ -172,6 +172,28 @@ def test_dispatch_covers_all_action_types() -> None:
 
 
 @pytest.mark.asyncio
+async def test_adb_drag_uses_draganddrop() -> None:
+    driver = AdbMobileDeviceDriver(cwd=Path("."), adb_path="adb")
+    captured: dict[str, str] = {}
+
+    async def fake_run_shell(body: str) -> DeviceCommandResult:
+        captured["body"] = body
+        return DeviceCommandResult(
+            command=f"adb shell {body}", exit_code=0, stdout="", stderr="", ok=True
+        )
+
+    driver._run_shell = fake_run_shell  # type: ignore[method-assign]
+
+    result = await driver.drag(10, 20, 30, 40, duration_ms=500)
+    assert result.ok is True
+    assert captured["body"] == "input draganddrop 10 20 30 40 500"
+
+    # No duration -> the drag-specific default (1000ms), distinct from swipe.
+    await driver.drag(10, 20, 30, 40)
+    assert captured["body"] == "input draganddrop 10 20 30 40 1000"
+
+
+@pytest.mark.asyncio
 async def test_adb_list_user_packages_returns_action_result() -> None:
     driver = AdbMobileDeviceDriver(cwd=Path("."), adb_path="adb")
 

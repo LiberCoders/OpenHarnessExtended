@@ -28,6 +28,7 @@ class ActionExecutor:
             ActionType.WAIT: self._run_wait,
             ActionType.LONG_PRESS: self._run_long_press,
             ActionType.SWIPE: self._run_swipe,
+            ActionType.DRAG: self._run_drag,
             ActionType.TYPE: self._run_type,
             ActionType.OPEN: self._run_open,
             ActionType.HOME: self._run_home,
@@ -111,6 +112,15 @@ class ActionExecutor:
         return (
             f"swipe({action.x},{action.y},{action.x2},{action.y2})",
             await self._driver.swipe(action.x, action.y, action.x2, action.y2, duration_ms),
+        )
+
+    async def _run_drag(self, action: GuiAction) -> tuple[str, DeviceActionResult]:
+        if None in (action.x, action.y, action.x2, action.y2):
+            raise RuntimeError("drag requires coordinate and coordinate2")
+        duration_ms = int(round(float(action.seconds) * 1000)) if action.seconds is not None else None
+        return (
+            f"drag({action.x},{action.y},{action.x2},{action.y2})",
+            await self._driver.drag(action.x, action.y, action.x2, action.y2, duration_ms),
         )
 
     async def _run_type(self, action: GuiAction) -> tuple[str, DeviceActionResult]:

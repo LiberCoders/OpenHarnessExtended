@@ -23,6 +23,7 @@ class ActionType(str, Enum):
     CLICK = "click"
     LONG_PRESS = "long_press"
     SWIPE = "swipe"
+    DRAG = "drag"
     TYPE = "type"
     OPEN = "open"
     KEY = "key"

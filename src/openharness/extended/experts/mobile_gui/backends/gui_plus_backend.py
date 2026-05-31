@@ -6,12 +6,9 @@ Reference:
 
 from __future__ import annotations
 
-import base64
 import json
 import math
-import mimetypes
 import re
-import struct
 import uuid
 from dataclasses import replace
 from datetime import datetime
@@ -21,6 +18,11 @@ from typing import Any
 import httpx
 from openai import OpenAI
 
+from openharness.extended.experts.mobile_gui.backends.image import (
+    image_to_data_url,
+    read_image_size,
+    truncate_for_log,
+)
 from openharness.extended.experts.mobile_gui.backends.base import GuiInferenceBackend
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
 from openharness.extended.experts.mobile_gui.types import ActionType, GuiAction, InferResult, Observation
@@ -216,7 +218,7 @@ class GuiPlusBackend(GuiInferenceBackend):
         history_tail = self._history[-history_n:] if history_n > 0 else []
         if history_tail:
             for history_id, history_item in enumerate(history_tail):
-                image_url = _image_to_data_url(Path(history_item["image_path"]))
+                image_url = image_to_data_url(Path(history_item["image_path"]))
                 if history_id == 0:
                     messages.append(
                         {
@@ -239,7 +241,7 @@ class GuiPlusBackend(GuiInferenceBackend):
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image_url", "image_url": {"url": _image_to_data_url(Path(current_image_path))}}
+                        {"type": "image_url", "image_url": {"url": image_to_data_url(Path(current_image_path))}}
                     ],
                 }
             )
@@ -249,7 +251,7 @@ class GuiPlusBackend(GuiInferenceBackend):
                     "role": "user",
                     "content": [
                         {"type": "text", "text": instruction_prompt},
-                        {"type": "image_url", "image_url": {"url": _image_to_data_url(Path(current_image_path))}},
+                        {"type": "image_url", "image_url": {"url": image_to_data_url(Path(current_image_path))}},
                     ],
                 }
             )
@@ -302,7 +304,7 @@ class GuiPlusBackend(GuiInferenceBackend):
                 "today_override": self._today_override,
                 "instruction": instruction,
                 "extra_instruction": context.extra_instruction,
-                "request": _truncate_for_log(request_payload),
+                "request": truncate_for_log(request_payload),
             }
             (step_dir / "requests.json").write_text(
                 json.dumps(request_doc, ensure_ascii=False, indent=2),
@@ -408,31 +410,6 @@ class GuiPlusBackend(GuiInferenceBackend):
             self._client.close()
         except Exception:
             pass
-
-
-def _truncate_for_log(obj: Any, *, b64_sample: int = 48) -> Any:
-    """Deep-copy ``obj``, truncating only base64 data URLs.
-
-    Everything else is stored verbatim. Base64 image payloads keep a short
-    sample plus the original length so the JSON stays small.
-    """
-    if isinstance(obj, dict):
-        return {k: _truncate_for_log(v, b64_sample=b64_sample) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_truncate_for_log(v, b64_sample=b64_sample) for v in obj]
-    if isinstance(obj, str) and obj.startswith("data:") and ";base64," in obj:
-        head, b64 = obj.split(";base64,", 1)
-        return f"{head};base64,{b64[:b64_sample]}...[truncated, {len(b64)} base64 chars]"
-    return obj
-
-
-def _image_to_data_url(image_path: Path) -> str:
-    raw = image_path.read_bytes()
-    mime, _ = mimetypes.guess_type(image_path.name)
-    if not mime:
-        mime = "image/jpeg"
-    b64 = base64.standard_b64encode(raw).decode("ascii")
-    return f"data:{mime};base64,{b64}"
 
 
 _KEY_NAME_TO_CODE: dict[str, int] = {
@@ -661,7 +638,7 @@ def _extract_gui_plus_arguments(response_text: str) -> dict[str, Any] | None:
 def _map_mobile_use_coordinate(*, x: int, y: int, screenshot_path: str | None) -> tuple[int, int]:
     """Map GUI-Plus 1000x1000 normalized coordinates to runtime pixel coordinates."""
     if screenshot_path and _looks_like_normalized_coordinate(x, y):
-        size = _read_image_size(Path(screenshot_path))
+        size = read_image_size(Path(screenshot_path))
         if size is not None:
             width, height = size
             resized_height, resized_width = _smart_resize(
@@ -679,48 +656,6 @@ def _map_mobile_use_coordinate(*, x: int, y: int, screenshot_path: str | None) -
 
 def _looks_like_normalized_coordinate(x: int, y: int) -> bool:
     return 0 <= x <= 1000 and 0 <= y <= 1000
-
-
-def _read_image_size(path: Path) -> tuple[int, int] | None:
-    try:
-        raw = path.read_bytes()
-    except Exception:
-        return None
-    try:
-        if raw.startswith(b"\x89PNG\r\n\x1a\n") and len(raw) >= 24:
-            width = struct.unpack(">I", raw[16:20])[0]
-            height = struct.unpack(">I", raw[20:24])[0]
-            if width > 0 and height > 0:
-                return width, height
-
-        if raw.startswith(b"\xff\xd8"):
-            idx = 2
-            raw_len = len(raw)
-            while idx + 9 < raw_len:
-                if raw[idx] != 0xFF:
-                    idx += 1
-                    continue
-                marker = raw[idx + 1]
-                idx += 2
-                if marker in {0xD8, 0xD9}:
-                    continue
-                if idx + 1 >= raw_len:
-                    break
-                segment_len = (raw[idx] << 8) + raw[idx + 1]
-                if segment_len < 2 or idx + segment_len > raw_len:
-                    break
-                if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
-                    if idx + 7 >= raw_len:
-                        break
-                    height = (raw[idx + 3] << 8) + raw[idx + 4]
-                    width = (raw[idx + 5] << 8) + raw[idx + 6]
-                    if width > 0 and height > 0:
-                        return width, height
-                    break
-                idx += segment_len
-    except Exception:
-        return None
-    return None
 
 
 def _smart_resize(

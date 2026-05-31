@@ -1,17 +1,37 @@
-"""Minimal hdc-based mobile device driver."""
+"""hdc-based mobile device driver for HarmonyOS."""
 
 from __future__ import annotations
 
 import asyncio
+import shlex
 import shutil
 from pathlib import Path
 
 from openharness.extended.experts.mobile_gui.device.base import MobileDeviceDriver
 from openharness.extended.experts.mobile_gui.device.results import DeviceActionResult, DeviceCommandResult
 
+# `uinput -T -m` smooth time is the gesture duration in ms (default 1000, max 15000).
+_MAX_SMOOTH_TIME_MS = 15000
+_DEFAULT_SWIPE_MS = 800
+_DEFAULT_LONG_PRESS_MS = 800
+# `uinput -T -g` drag requires press_time >= 500 and (total - press) >= 500.
+_DRAG_PRESS_MS = 500
+_DRAG_MIN_TOTAL_MS = _DRAG_PRESS_MS + 500
+_DEFAULT_DRAG_MS = 1000
+# HarmonyOS navigation keycodes (@ohos.multimodalInput.keyCode), verified on-device.
+_KEYCODE_HOME = 1
+_KEYCODE_BACK = 2
+
 
 class HdcMobileDeviceDriver(MobileDeviceDriver):
-    """Execute minimal actions through hdc."""
+    """Execute actions through hdc on HarmonyOS devices.
+
+    All input primitives go through ``uinput`` (the low-level event injector):
+    plain screen coordinates and gesture durations map to it directly, keeping
+    every action on one injection path. ``home``/``back`` use the verified
+    navigation keycodes (HOME=1, BACK=2). Only ``open_app`` steps outside
+    ``uinput``, using ``aa start`` to launch an app by bundle name.
+    """
     transport_name = "hdc"
 
     def __init__(self, *, cwd: Path, serial: str | None = None) -> None:
@@ -46,6 +66,87 @@ class HdcMobileDeviceDriver(MobileDeviceDriver):
     async def click(self, x: int, y: int) -> DeviceActionResult:
         self._require_hdc_available()
         result = await self._run(["shell", "uinput", "-T", "-c", str(x), str(y)])
+        return DeviceActionResult(ok=result.ok, results=[result])
+
+    async def long_press(self, x: int, y: int, duration_ms: int | None = None) -> DeviceActionResult:
+        # Press down, hold for `duration_ms` (via -i interval), then release in place.
+        self._require_hdc_available()
+        hold = max(1, int(duration_ms) if duration_ms is not None else _DEFAULT_LONG_PRESS_MS)
+        result = await self._run(
+            ["shell", "uinput", "-T", "-d", str(x), str(y), "-i", str(hold), "-u", str(x), str(y)]
+        )
+        return DeviceActionResult(ok=result.ok, results=[result])
+
+    async def swipe(
+        self, x1: int, y1: int, x2: int, y2: int, duration_ms: int | None = None
+    ) -> DeviceActionResult:
+        # `-m` smooth time IS the gesture duration in ms — no velocity conversion.
+        self._require_hdc_available()
+        smooth = int(duration_ms) if duration_ms is not None else _DEFAULT_SWIPE_MS
+        smooth = max(1, min(_MAX_SMOOTH_TIME_MS, smooth))
+        result = await self._run(
+            ["shell", "uinput", "-T", "-m", str(x1), str(y1), str(x2), str(y2), str(smooth)]
+        )
+        return DeviceActionResult(ok=result.ok, results=[result])
+
+    async def drag(
+        self, x1: int, y1: int, x2: int, y2: int, duration_ms: int | None = None
+    ) -> DeviceActionResult:
+        # `-g` is a native drag with a long-press grab phase. duration_ms maps to
+        # total time; the tool requires press >= 500ms and total - press >= 500ms.
+        self._require_hdc_available()
+        total = int(duration_ms) if duration_ms is not None else _DEFAULT_DRAG_MS
+        total = max(_DRAG_MIN_TOTAL_MS, total)
+        result = await self._run(
+            [
+                "shell", "uinput", "-T", "-g",
+                str(x1), str(y1), str(x2), str(y2), str(_DRAG_PRESS_MS), str(total),
+            ]
+        )
+        return DeviceActionResult(ok=result.ok, results=[result])
+
+    async def type_text(self, text: str) -> DeviceActionResult:
+        # `uinput -K -t` types into the focused field — no coordinates needed.
+        # The text is one shell token, so quote it for the device-side re-parse.
+        # (-t cannot be combined with other uinput commands; keep it standalone.)
+        self._require_hdc_available()
+        result = await self._run(["shell", "uinput", "-K", "-t", shlex.quote(text)])
+        return DeviceActionResult(ok=result.ok, results=[result])
+
+    async def keyevent(self, keycode: int) -> DeviceActionResult:
+        self._require_hdc_available()
+        code = str(int(keycode))
+        result = await self._run(["shell", "uinput", "-K", "-d", code, "-u", code])
+        return DeviceActionResult(ok=result.ok, results=[result])
+
+    async def home(self) -> DeviceActionResult:
+        return await self.keyevent(_KEYCODE_HOME)
+
+    async def back(self) -> DeviceActionResult:
+        return await self.keyevent(_KEYCODE_BACK)
+
+    async def open_app(self, app_or_package: str) -> DeviceActionResult:
+        # HarmonyOS launches by bundle name via `aa start`. We don't fuzzy-resolve
+        # human app names here (the alias table is Android-oriented), so a bare
+        # bundle name is required; anything else is a soft failure with guidance.
+        self._require_hdc_available()
+        bundle = (app_or_package or "").strip()
+        if not bundle or " " in bundle or "/" in bundle or "." not in bundle:
+            return DeviceActionResult(
+                ok=False,
+                results=[
+                    DeviceCommandResult(
+                        command="hdc:open",
+                        exit_code=-1,
+                        stdout="",
+                        stderr=(
+                            f"hdc open_app needs a bundle name (e.g. com.example.app); got {app_or_package!r}"
+                        ),
+                        ok=False,
+                    )
+                ],
+            )
+        result = await self._run(["shell", "aa", "start", "-b", bundle])
         return DeviceActionResult(ok=result.ok, results=[result])
 
     async def wait(self, seconds: float) -> DeviceActionResult:
@@ -97,4 +198,3 @@ class HdcMobileDeviceDriver(MobileDeviceDriver):
             ok=process.returncode == 0,
         )
         return result
-

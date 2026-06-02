@@ -92,12 +92,17 @@ class GuiActionResult:
 
     action: GuiAction
     device_result: DeviceActionResult
+    # Human-readable per-action outcome (as the executor reports it). Kept per
+    # result so a backend can replay each tool call's own result, rather than
+    # the single overwritten ``context.last_message``.
+    message: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable view: the action plus its per-command outcomes."""
         dev = self.device_result
         return {
             "action": self.action.to_dict(),
+            "message": self.message,
             "ok": dev.ok,
             "output_path": dev.output_path,
             "commands": [

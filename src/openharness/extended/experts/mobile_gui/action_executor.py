@@ -76,11 +76,12 @@ class ActionExecutor:
                 raise UnsupportedActionError(str(action.action), self._driver.transport_name)
 
             action_desc, result = await runner(action)
-            results.append(GuiActionResult(action=action, device_result=result))
-            context.last_action = action_desc if result.ok else f"{action_desc}:failed"
-            context.last_message = _format_result_message(
+            message = _format_result_message(
                 action_desc=action_desc, result=result, action_message=action.message
             )
+            results.append(GuiActionResult(action=action, device_result=result, message=message))
+            context.last_action = action_desc if result.ok else f"{action_desc}:failed"
+            context.last_message = message
             if not result.ok:
                 break  # soft failure: stop this plan, but do NOT raise
 

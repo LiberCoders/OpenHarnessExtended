@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from openharness.extended.experts.mobile_gui.backends.gui_plus_backend import GuiPlusBackend
-from openharness.extended.experts.mobile_gui.types import ActionType, GuiAction, Observation
+from openharness.extended.experts.mobile_gui.types import ActionType, GuiAction, InferResult, Observation
 
 
 def _backend() -> GuiPlusBackend:
@@ -16,13 +16,18 @@ def _backend() -> GuiPlusBackend:
     )
 
 
+def _ir(text: str) -> InferResult:
+    """GUI-Plus encodes its action in the response text, so wrap it as InferResult."""
+    return InferResult(text=text, model_request=None)
+
+
 def test_parse_swipe_accepts_coordinate1_and_coordinate2() -> None:
     b = _backend()
     text = """Action: swipe
 <tool_call>
 {"name": "mobile_use", "arguments": {"action": "swipe", "coordinate1": [100, 200], "coordinate2": [300, 400]}}
 </tool_call>"""
-    actions = b.parse_action(text)
+    actions = b.parse_action(_ir(text))
     assert len(actions) == 1
     act = actions[0]
     assert act.action == ActionType.SWIPE
@@ -38,7 +43,7 @@ Action: tap
 <tool_call>
 {"name": "mobile_use", "arguments": {"action": "click", "coordinate": [500, 500]}}
 </tool_call>"""
-    actions = b.parse_action(text)
+    actions = b.parse_action(_ir(text))
     assert len(actions) == 1
     act = actions[0]
     assert act.action == ActionType.CLICK and act.x == 500 and act.y == 500
@@ -54,8 +59,8 @@ def test_parse_home_back_actions() -> None:
 <tool_call>
 {"name":"mobile_use","arguments":{"action":"back"}}
 </tool_call>"""
-    assert b.parse_action(home)[0].action == ActionType.HOME
-    assert b.parse_action(back)[0].action == ActionType.BACK
+    assert b.parse_action(_ir(home))[0].action == ActionType.HOME
+    assert b.parse_action(_ir(back))[0].action == ActionType.BACK
 
 
 def test_adapt_swipe_maps_both_endpoints() -> None:

@@ -18,13 +18,15 @@ class GuiInferenceBackend(ABC):
         """Return raw text, request payload, and reasoning content."""
 
     @abstractmethod
-    def parse_action(self, response_text: str) -> list[GuiAction]:
-        """Parse backend response text into one or more executable actions.
+    def parse_action(self, result: InferResult) -> list[GuiAction]:
+        """Parse an ``InferResult`` into one or more executable actions.
 
-        Returns a list to allow composite actions (e.g. click + type) and
-        arbitrary name remapping (e.g. a model 'click' that is really a swipe).
-        The mapping from the model's native action space onto the canonical
-        ``ActionType`` vocabulary lives entirely here.
+        The backend decides which fields to read: a text backend parses
+        ``result.text``; a standard function-calling backend reads
+        ``result.tool_calls`` directly (no text round-trip). Returns a list to
+        allow composite actions (e.g. click + type) and arbitrary name
+        remapping. The mapping from the model's native action space onto the
+        canonical ``ActionType`` vocabulary lives entirely here.
         """
         raise NotImplementedError
 

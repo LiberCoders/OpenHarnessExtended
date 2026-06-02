@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -130,8 +130,19 @@ class ReasoningOutcome:
 
 @dataclass
 class InferResult:
-    """Inference output returned by GUI backend infer()."""
+    """Inference output returned by GUI backend infer().
 
-    raw_response: str
+    ``text`` is the model's human-readable output (e.g. ``message.content`` or
+    the raw completion text) — kept readable for journaling/status display, and
+    named ``text`` rather than ``message`` to avoid confusion with OpenAI's
+    ``messages``. ``tool_calls`` carries the structured calls from standard
+    function calling (shape ``{id, name, arguments}``); text-only backends leave
+    it empty. The full provider completion is *not* stored here — backends
+    archive it to ``response.json`` instead. ``parse_action`` receives this whole
+    object and decides which fields to read.
+    """
+
+    text: str
     model_request: dict[str, Any] | None
     reasoning_content: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)

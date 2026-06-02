@@ -128,17 +128,20 @@ class GuiPlusBackend(GuiInferenceBackend):
             }
         )
         return InferResult(
-            raw_response=text,
+            text=text,
             model_request=request_payload,
             reasoning_content=reasoning_content,
         )
 
-    def parse_action(self, response_text: str) -> list[GuiAction]:
+    def parse_action(self, result: InferResult) -> list[GuiAction]:
         """Parse a GUI-Plus response into canonical actions.
 
-        GUI-Plus emits one action per step, so this returns a single-element
-        list; the list shape exists for backends that emit composite actions.
+        GUI-Plus encodes its action in the response *text* (a ``<tool_call>``
+        block), so this reads ``result.text``. It emits one action per
+        step, so this returns a single-element list; the list shape exists for
+        backends that emit composite actions.
         """
+        response_text = result.text
         payload = _extract_gui_plus_arguments(response_text)
         if payload is None:
             raise ValueError(f"Failed to parse GUI-Plus tool_call arguments: {response_text}")

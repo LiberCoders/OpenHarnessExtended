@@ -21,9 +21,10 @@ class MobilePerception:
         result = await self._driver.screenshot(screenshot_path)
         path = result.output_path or str(screenshot_path)
         if not result.ok:
+            multi = len(result.results) > 1
             detail = " | ".join(
                 [
-                    f"cmd[{idx}]={item.command},exit={item.exit_code},stdout={item.stdout or '(empty)'},stderr={item.stderr or '(empty)'}"
+                    f"{'cmd['+str(idx)+']' if multi else 'cmd'}={item.command},exit={item.exit_code},stdout={item.stdout or '(empty)'},stderr={item.stderr or '(empty)'}"
                     for idx, item in enumerate(result.results, start=1)
                 ]
             )

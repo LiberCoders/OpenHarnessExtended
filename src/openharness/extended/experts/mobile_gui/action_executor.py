@@ -150,13 +150,15 @@ def _format_result_message(
     *, action_desc: str, result: DeviceActionResult, action_message: str
 ) -> str:
     parts = [f"{action_desc}: {'ok' if result.ok else 'failed'}"]
+    multi = len(result.results) > 1
     for idx, cmd_result in enumerate(result.results, start=1):
+        sfx = f"[{idx}]" if multi else ""
         parts.extend(
             [
-                f"cmd[{idx}]={cmd_result.command}",
-                f"exit_code[{idx}]={cmd_result.exit_code}",
-                f"stdout[{idx}]={cmd_result.stdout or '(empty)'}",
-                f"stderr[{idx}]={cmd_result.stderr or '(empty)'}",
+                f"cmd{sfx}={cmd_result.command}",
+                f"exit_code{sfx}={cmd_result.exit_code}",
+                f"stdout{sfx}={cmd_result.stdout or '(empty)'}",
+                f"stderr{sfx}={cmd_result.stderr or '(empty)'}",
             ]
         )
     if action_message:

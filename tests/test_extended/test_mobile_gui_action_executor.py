@@ -173,8 +173,7 @@ def test_dispatch_covers_all_action_types() -> None:
 
 @pytest.mark.asyncio
 async def test_adb_drag_uses_draganddrop() -> None:
-    driver = AdbMobileDeviceDriver(cwd=Path("."), adb_path="adb")
-    captured: dict[str, str] = {}
+    driver = AdbMobileDeviceDriver(cwd=Path("."), exec_path="adb")
 
     async def fake_run_shell(body: str) -> DeviceCommandResult:
         captured["body"] = body
@@ -195,7 +194,7 @@ async def test_adb_drag_uses_draganddrop() -> None:
 
 @pytest.mark.asyncio
 async def test_adb_list_user_packages_returns_action_result() -> None:
-    driver = AdbMobileDeviceDriver(cwd=Path("."), adb_path="adb")
+    driver = AdbMobileDeviceDriver(cwd=Path("."), exec_path="adb")
 
     async def fake_run_shell(_: str) -> DeviceCommandResult:
         return DeviceCommandResult(

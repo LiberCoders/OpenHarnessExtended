@@ -34,13 +34,13 @@ class HdcMobileDeviceDriver(MobileDeviceDriver):
     """
     transport_name = "hdc"
 
-    def __init__(self, *, cwd: Path, serial: str | None = None) -> None:
+    def __init__(self, *, cwd: Path, serial: str | None = None, exec_path: str | None = None) -> None:
         self._cwd = cwd
         self._serial = serial
-        self._hdc_bin = shutil.which("hdc")
+        self._hdc_bin = (exec_path or "").strip() or shutil.which("hdc") or ""
 
     def is_available(self) -> bool:
-        return self._hdc_bin is not None
+        return bool(self._hdc_bin)
 
     async def screenshot(self, output_path: Path) -> DeviceActionResult:
         self._require_hdc_available()
@@ -174,8 +174,8 @@ class HdcMobileDeviceDriver(MobileDeviceDriver):
         return argv
 
     def _require_hdc_available(self) -> None:
-        if self._hdc_bin is None:
-            raise RuntimeError("hdc binary not found in PATH")
+        if not self._hdc_bin:
+            raise RuntimeError("hdc binary not found; set mobile_gui.transport_exec_path or add hdc to PATH")
 
     async def _run(self, tail_args: list[str]) -> DeviceCommandResult:
         argv = self._build_argv(tail_args)

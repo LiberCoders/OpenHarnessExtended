@@ -13,16 +13,21 @@ DriverFactory = Callable[[Path, str | None, dict[str, Any]], MobileDeviceDriver]
 
 
 def _build_adb_driver(cwd: Path, serial: str | None, opts: dict[str, Any]) -> MobileDeviceDriver:
-    adb_path = opts.get("adb_path")
+    exec_path = opts.get("transport_exec_path")
     return AdbMobileDeviceDriver(
         cwd=cwd,
         serial=serial,
-        adb_path=str(adb_path).strip() if isinstance(adb_path, str) and adb_path.strip() else None,
+        exec_path=str(exec_path).strip() if isinstance(exec_path, str) and exec_path.strip() else None,
     )
 
 
 def _build_hdc_driver(cwd: Path, serial: str | None, opts: dict[str, Any]) -> MobileDeviceDriver:
-    return HdcMobileDeviceDriver(cwd=cwd, serial=serial)
+    exec_path = opts.get("transport_exec_path")
+    return HdcMobileDeviceDriver(
+        cwd=cwd,
+        serial=serial,
+        exec_path=str(exec_path).strip() if isinstance(exec_path, str) and exec_path.strip() else None,
+    )
 
 
 DRIVER_FACTORIES: dict[str, DriverFactory] = {

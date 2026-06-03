@@ -28,13 +28,13 @@ class AdbMobileDeviceDriver(MobileDeviceDriver):
         *,
         cwd: Path,
         serial: str | None = None,
-        adb_path: str | None = None,
+        exec_path: str | None = None,
         swipe_default_ms: int = _DEFAULT_SWIPE_MS,
         long_press_default_ms: int = _DEFAULT_LONG_PRESS_MS,
     ) -> None:
         self._cwd = cwd
         self._serial = serial
-        self._adb_bin = (adb_path or "").strip() or shutil.which("adb") or ""
+        self._adb_bin = (exec_path or "").strip() or shutil.which("adb") or ""
         self._swipe_default_ms = max(_MIN_GESTURE_DURATION_MS, int(swipe_default_ms))
         self._long_press_default_ms = max(_MIN_GESTURE_DURATION_MS, int(long_press_default_ms))
 
@@ -43,7 +43,7 @@ class AdbMobileDeviceDriver(MobileDeviceDriver):
 
     def _prefix_argv(self) -> list[str]:
         if not self._adb_bin:
-            raise RuntimeError("adb binary not found; set mobile_gui.adb_path or install platform-tools")
+            raise RuntimeError("adb binary not found; set mobile_gui.transport_exec_path or install platform-tools")
         argv = [str(self._adb_bin)]
         if self._serial:
             argv.extend(["-s", self._serial])

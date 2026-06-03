@@ -387,6 +387,22 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
 
         status, exit_reason = await pack.run_steps(channel)
 
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # Defensive: the cooperative stop path is the downlink "terminate" the
+        # loop reads at each step boundary. But if an OS signal still reaches the
+        # worker directly (e.g. a terminal Ctrl-C delivered to the whole process
+        # group), unwind it as a clean, intentional stop — not a crash — so it
+        # doesn't fall through to the failed/error branch below.
+        status = "stopped"
+        exit_reason = "expert_interrupted"
+        if pack is not None and pack.context is not None:
+            pack.context.last_action = "terminate(interrupted)"
+            pack.context.last_message = "interrupted (Ctrl-C / terminate signal)"
+        logger.info(
+            "%s worker interrupted: expert_id=%s — flushing and cleaning up",
+            config.expert_type,
+            expert_id,
+        )
     except BaseException as exc:
         status = "failed"
         # Distinguish a crash during init (auth/model/backend config) from one
@@ -503,7 +519,14 @@ def run_expert_worker_entry(config: dict, downlink_queue, uplink_queue) -> None:
         raise SystemExit(2)
 
     parsed = ExpertRunConfig.from_worker_dict(config, expert_type=expert_type)
-    exit_code = asyncio.run(_run_expert_loop(parsed, worker_channel))
+    try:
+        exit_code = asyncio.run(_run_expert_loop(parsed, worker_channel))
+    except KeyboardInterrupt:
+        # A signal that landed outside the loop's own handling (e.g. between
+        # asyncio.run's task cancellation and return) bubbled up here. The loop's
+        # finally already flushed and cleaned up; exit cleanly instead of dumping
+        # a traceback. 130 = 128 + SIGINT, the conventional "interrupted" code.
+        exit_code = 130
     raise SystemExit(exit_code)
 
 

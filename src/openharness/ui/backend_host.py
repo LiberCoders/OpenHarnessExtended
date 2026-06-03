@@ -188,6 +188,12 @@ class ReactBackendHost:
             reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reader
+            # Don't leave background experts orphaned when the host exits — ask
+            # them to stop cleanly before we tear the runtime/channels down.
+            with contextlib.suppress(Exception):
+                from openharness.extended.channel import get_channel_registry
+
+                get_channel_registry().request_stop_all(message="host shutting down")
             try:
                 if self._bundle is not None:
                     await close_runtime(self._bundle)
@@ -252,6 +258,17 @@ class ReactBackendHost:
                 self._active_request_task = None
 
     async def _interrupt_active_request(self) -> None:
+        # Ctrl-C should also stop background experts (delegate_to_expert spawns
+        # them as fire-and-forget processes that outlive the spawning turn, so
+        # cancelling the turn task below never reaches them). Ask each to stop at
+        # its next step boundary — unconditionally, since an expert may still be
+        # running even when there is no active turn task to cancel.
+        try:
+            from openharness.extended.channel import get_channel_registry
+
+            get_channel_registry().request_stop_all(message="interrupted by user")
+        except Exception:
+            pass
         task = self._active_request_task
         if task is None or task.done():
             return
@@ -958,7 +975,14 @@ def _install_sigterm_channel_cleanup() -> None:
     def _handler(_signum, _frame):  # type: ignore[no-untyped-def]
         try:
             from openharness.extended.channel import get_channel_registry
-            get_channel_registry().close_all_channels()
+
+            # Best-effort: ask experts to stop before we drop the channels they'd
+            # read that request from. On this hard-SIGTERM path the host is about
+            # to die, so this is a courtesy, not a guarantee.
+            registry = get_channel_registry()
+            with contextlib.suppress(Exception):
+                registry.request_stop_all(message="host shutting down")
+            registry.close_all_channels()
         except Exception:
             pass
         # Restore default and re-raise so the process exits with the conventional

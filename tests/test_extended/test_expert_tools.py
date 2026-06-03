@@ -239,3 +239,58 @@ async def test_query_and_send_tools_use_channel_registry(tmp_path: Path, monkeyp
     assert payload["last_action"] == "wait(1.0)"
     worker.close()
 
+
+@pytest.mark.asyncio
+async def test_request_stop_all_sends_cooperative_terminate(tmp_path: Path, monkeypatch):
+    """request_stop_all enqueues a downlink `terminate` for live workers only."""
+    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    registry = get_channel_registry()
+
+    class _Alive:
+        def is_alive(self) -> bool:
+            return True
+
+    class _Dead:
+        def is_alive(self) -> bool:
+            return False
+
+    alive_channel = create_channel("stop_alive")
+    dead_channel = create_channel("stop_dead")
+    registry.register(
+        ExpertHandle(
+            expert_id="stop_alive",
+            expert_type="mobile_gui",
+            task_id="a",
+            channel=alive_channel,
+            process=_Alive(),
+            task="t",
+        )
+    )
+    registry.register(
+        ExpertHandle(
+            expert_id="stop_dead",
+            expert_type="mobile_gui",
+            task_id="d",
+            channel=dead_channel,
+            process=_Dead(),
+            task="t",
+        )
+    )
+
+    registry.request_stop_all(message="bye")
+    await asyncio.sleep(0.05)
+
+    alive_worker = connect_worker_channel(
+        downlink_queue=alive_channel.downlink_queue, uplink_queue=alive_channel.uplink_queue
+    )
+    dead_worker = connect_worker_channel(
+        downlink_queue=dead_channel.downlink_queue, uplink_queue=dead_channel.uplink_queue
+    )
+    alive_msgs = alive_worker.read_for_worker()
+    dead_msgs = dead_worker.read_for_worker()
+    # Live worker gets the cooperative terminate; the dead one is skipped entirely.
+    assert any(m.kind == "terminate" and m.payload.get("message") == "bye" for m in alive_msgs)
+    assert all(m.kind != "terminate" for m in dead_msgs)
+    alive_worker.close()
+    dead_worker.close()
+

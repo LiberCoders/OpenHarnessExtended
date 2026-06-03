@@ -258,6 +258,29 @@ async def test_read_requests_interrupt_cancels_active_request(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_interrupt_stops_background_experts_even_without_active_task(monkeypatch):
+    """Ctrl-C must reap fire-and-forget experts regardless of any active turn task."""
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
+
+    calls: list[dict] = []
+
+    class _SpyRegistry:
+        def request_stop_all(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(
+        "openharness.extended.channel.get_channel_registry",
+        lambda: _SpyRegistry(),
+    )
+
+    # No active turn task: an expert may still be running in the background, so
+    # the interrupt must still ask experts to stop.
+    host._active_request_task = None
+    await host._interrupt_active_request()
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_run_active_request_recovers_from_cancel(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))

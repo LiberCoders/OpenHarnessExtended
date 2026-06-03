@@ -64,6 +64,30 @@ class ChannelRegistry:
         # while the resource_tracker pipe is still open.
         gc.collect()
 
+    def request_stop_all(self, *, message: str = "stop requested") -> None:
+        """Ask every live worker to stop at its next step boundary (cooperative).
+
+        Sends the downlink ``terminate`` the worker loop already honors: the
+        worker finishes the in-flight step (its current LLM call + action), then
+        breaks *before* the next step and runs its normal flush/cleanup. We
+        prefer this over killing the process so the in-flight reasoning isn't
+        lost — the only thing we want to stop is marching on to the next step.
+
+        Non-blocking: the message is enqueued and the worker stops on its own; we
+        do not ``join()`` (this runs on the leader's event loop).
+        """
+        for handle in list(self._handles.values()):
+            proc = getattr(handle, "process", None)
+            try:
+                if proc is not None and not proc.is_alive():
+                    continue
+            except Exception:
+                pass
+            try:
+                self.send_downlink(handle, kind="terminate", payload={"message": message})
+            except Exception:
+                pass
+
     def register(self, handle: ExpertHandle) -> None:
         self._handles[handle.expert_id] = handle
 

@@ -12,28 +12,24 @@ from openharness.extended.channel import get_channel_registry
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
 
+_POLL_INTERVAL_SECONDS = 0.2
+
+
 class GetExpertStatusToolInput(BaseModel):
     """Arguments for querying one delegated expert status."""
 
-    expert_id: str = Field(
-        ...,
-        description=(
-            "The expert id returned by delegate_to_expert (shown as "
-            "expert_id=... in its output and metadata). Required."
-        ),
+    expert_id: str = Field(..., description="expert_id returned by delegate_to_expert.")
+    timeout_seconds: float = Field(
+        default=0.0, ge=0.0, le=30.0,
+        description="Seconds to wait for expert to finish (default 0=return immediately, max 30).",
     )
-    wait: bool = Field(default=False, description="Wait until expert process exits.")
-    timeout_seconds: float = Field(default=0.0, ge=0.0, le=3600.0)
 
 
 class GetExpertStatusTool(BaseTool):
     """Read combined channel state + task lifecycle for one expert."""
 
     name = "get_expert_status"
-    description = (
-        "Query status of a delegated expert. You MUST pass expert_id "
-        "(the id returned by delegate_to_expert)."
-    )
+    description = "Query status of a delegated expert. Returns current snapshot immediately; set timeout_seconds to block up to 30s."
     input_model = GetExpertStatusToolInput
 
     def is_read_only(self, arguments: GetExpertStatusToolInput) -> bool:
@@ -45,15 +41,15 @@ class GetExpertStatusTool(BaseTool):
         if handle is None:
             return ToolResult(output="expert not found in channel registry", is_error=True)
 
-        if arguments.wait:
+        if arguments.timeout_seconds > 0:
             deadline = asyncio.get_running_loop().time() + arguments.timeout_seconds
             while True:
                 handle = registry.refresh(handle)
                 if not handle.process.is_alive():
                     break
-                if arguments.timeout_seconds > 0 and asyncio.get_running_loop().time() >= deadline:
+                if asyncio.get_running_loop().time() >= deadline:
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
         handle = registry.refresh(handle)
         process = handle.process
         process_status = "running" if process.is_alive() else "stopped"

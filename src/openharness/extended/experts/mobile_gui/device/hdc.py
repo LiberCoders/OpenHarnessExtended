@@ -107,11 +107,10 @@ class HdcMobileDeviceDriver(MobileDeviceDriver):
         return DeviceActionResult(ok=result.ok, results=[result])
 
     async def type_text(self, text: str) -> DeviceActionResult:
-        # `uinput -K -t` types into the focused field — no coordinates needed.
-        # The text is one shell token, so quote it for the device-side re-parse.
-        # (-t cannot be combined with other uinput commands; keep it standalone.)
+        # uitest uiInput inputText injects text via the accessibility framework
+        # and supports Unicode/CJK — uinput -K -t only handles ASCII keycodes.
         self._require_hdc_available()
-        result = await self._run(["shell", "uinput", "-K", "-t", shlex.quote(text)])
+        result = await self._run(["shell", "uitest", "uiInput", "text", shlex.quote(text)])
         return DeviceActionResult(ok=result.ok, results=[result])
 
     async def keyevent(self, keycode: int) -> DeviceActionResult:

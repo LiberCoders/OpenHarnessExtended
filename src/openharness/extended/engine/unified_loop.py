@@ -21,7 +21,7 @@ from openharness.extended.experts.mobile_gui.device.package_aliases import regis
 from openharness.extended.experts.mobile_gui.perception import MobilePerception
 from openharness.extended.experts.mobile_gui.reasoning import MobileGuiReasoning
 from openharness.extended.experts.mobile_gui.state_store import MobileGuiStateStore
-from openharness.extended.experts.mobile_gui.status_digest import build_status_digest, build_step_event
+from openharness.extended.experts.mobile_gui.status_digest import build_status_digest, build_step_event, _readable_path
 from openharness.extended.experts.mobile_gui.types import ActionType
 from openharness.extended.channel import connect_worker_channel
 from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
@@ -240,7 +240,7 @@ class ExpertLoopPack:
                     base_dir=cfg.cwd,
                 ),
             )
-            channel.send_to_leader("status", build_status_digest(self.context, status=status))
+            channel.send_to_leader("status", build_status_digest(self.context, status=status, base_dir=cfg.cwd))
             if self.context.done:
                 break
         else:
@@ -453,7 +453,7 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
                     "exit_reason": exit_reason or "unknown",
                     "last_action": getattr(ctx, "last_action", "") if ctx else "terminate(bootstrap_failure)",
                     "message": getattr(ctx, "last_message", "") if ctx else error_message,
-                    "last_screenshot": getattr(ctx, "last_screenshot", "") if ctx else "",
+                    "last_screenshot": _readable_path(getattr(ctx, "last_screenshot", "") if ctx else "", config.cwd),
                     "steps": getattr(ctx, "step", 0) if ctx else 0,
                 }
             )
@@ -464,7 +464,7 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
                 pass
         if ctx is not None:
             try:
-                channel.send_to_leader("status", build_status_digest(ctx, status=status))
+                channel.send_to_leader("status", build_status_digest(ctx, status=status, base_dir=config.cwd))
             except Exception:
                 pass
         elif error_message:

@@ -13,14 +13,14 @@ from openharness.extended.experts.mobile_gui.context import MobileGuiContext
 _TEXT_FIELD_LIMIT = 16000
 
 
-def build_status_digest(context: MobileGuiContext, *, status: str) -> dict[str, str]:
+def build_status_digest(context: MobileGuiContext, *, status: str, base_dir: object = None) -> dict[str, str]:
     """Return the normalized status payload published over the channel."""
     return {
         "status": status,
         "step": str(context.step),
         "last_action": context.last_action,
         "message": context.last_message,
-        "last_screenshot": context.last_screenshot,
+        "last_screenshot": _readable_path(context.last_screenshot, base_dir),
     }
 
 

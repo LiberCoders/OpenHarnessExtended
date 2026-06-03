@@ -75,16 +75,19 @@ class GetExpertStatusTool(BaseTool):
         # poll just wastes tokens. channel_status is omitted too: it is recoverable
         # from process_status (running/stopped) + result.status (terminal). Step
         # events are already dicts, so they embed directly — no manual formatter.
-        data = {
+        data: dict = {
             "process_status": process_status,
             "process_exit_code": exit_code,
-            "last_action": handle.last_action,
-            "last_message": handle.last_message,
-            "last_screenshot": handle.last_screenshot,
             "result": result_payload,
             "new_steps_since_last_query": len(new_events),
             "new_steps": new_events,
         }
+        # When running, result is empty — surface live state at the top level.
+        # When stopped, result already contains last_action/message/screenshot.
+        if process_status == "running":
+            data["last_action"] = handle.last_action
+            data["last_message"] = handle.last_message
+            data["last_screenshot"] = handle.last_screenshot
         return ToolResult(output=json.dumps(data, indent=2, ensure_ascii=False))
 
 

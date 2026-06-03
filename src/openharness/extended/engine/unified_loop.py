@@ -287,9 +287,9 @@ def build_expert_loop_pack(
         raw_prompt_meta = getattr(settings, "prompt_meta", None) if settings is not None else None
         prompt_meta = raw_prompt_meta if isinstance(raw_prompt_meta, dict) else {}
         task_apps = prompt_meta.get("apps")
-        if isinstance(task_apps, list) and task_apps:
-            register_task_apps(task_apps)
         transport = str(mobile_gui_opts.get("device_transport") or "").strip().lower()
+        if isinstance(task_apps, list) and task_apps:
+            register_task_apps(task_apps, transport=transport or "adb")
         spawn_serial = _coalesce_device_serial(config.device_serial)
         settings_serial = _coalesce_device_serial(mobile_gui_opts.get("device_serial"))
         serial = _coalesce_device_serial(config.device_serial, mobile_gui_opts.get("device_serial"))

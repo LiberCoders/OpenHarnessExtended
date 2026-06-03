@@ -1,8 +1,9 @@
-"""Common Android package id ↔ display name aliases for `open` actions."""
+"""Common package id ↔ display name aliases for `open` actions (Android + HarmonyOS)."""
 
 from __future__ import annotations
 
-# Tab-separated rows: package_id, alias1, alias2, ... (from user-maintained list)
+# Tab-separated rows: bundle/package_id, alias1, alias2, ...
+# Android (adb transport) entries
 _PACKAGE_ALIAS_LINES = r"""com.tencent.mm	微信	wechat
 com.tencent.mobileqq	qq	腾讯qq
 com.sina.weibo	微博
@@ -152,14 +153,75 @@ com.hanweb.android.zhejiang.activity	浙里办
 com.ss.android.article.video	西瓜视频
 com.taou.maimai	脉脉"""
 
+# HarmonyOS (hdc transport) bundle name entries
+_HARMONY_BUNDLE_ALIAS_LINES = r"""com.huawei.hmos.settings	设置	华为设置	settings
+com.huawei.hmos.camera	相机	摄像头	camera
+com.huawei.hmos.photos	图库	相册	photos	gallery
+com.huawei.hmos.browser	浏览器	华为浏览器	browser
+com.huawei.hmos.email	邮件	华为邮件	email
+com.huawei.hmos.calendar	日历	calendar
+com.huawei.hmos.clock	时钟	闹钟	clock
+com.huawei.hmos.calculator	计算器	calculator
+com.huawei.hmos.notepad	备忘录	笔记	notepad	notes
+com.huawei.hmos.filemanager	文件管理器	文件管理	filemanager
+com.huawei.hmos.files	文件	files
+com.huawei.hmos.soundrecorder	录音机	录音	recorder
+com.huawei.hmos.screenrecorder	屏幕录制	录屏	screenrecorder
+com.huawei.hmos.videoplayer	视频播放器	视频	videoplayer
+com.huawei.hmos.maps.app	地图	华为地图	map	maps
+com.huawei.hmos.health	运动健康	健康	health
+com.huawei.hmos.wallet	钱包	华为钱包	wallet
+com.huawei.hmos.clouddrive	云空间	华为云	clouddrive
+com.huawei.hmos.meetime	畅联	视频通话	meetime
+com.huawei.hmos.myhuawei	我的华为	myhuawei
+com.huawei.hmos.vmall	华为商城	商城	vmall
+com.huawei.hmos.hicar	HiCar	hicar
+com.huawei.hmos.vassistant.launcher	小艺	语音助手	assistant
+com.huawei.hmos.inputmethod	小艺输入法	输入法	inputmethod
+com.huawei.hmos.applock	应用锁	applock
+com.huawei.hmos.databackup	数据和恢复	备份	backup
+com.huawei.hmos.instantshare	华为分享	分享	instantshare
+com.huawei.hmos.hisuite	华为手机助手	hisuite
+com.huawei.hmsapp.appgallery	应用市场	应用商店	appgallery
+com.huawei.hmsapp.music	音乐	华为音乐	music
+com.huawei.hmsapp.himovie	视频	华为视频	himovie
+com.huawei.hmsapp.books	阅读	华为阅读	books	reading
+com.huawei.hmsapp.compass	指南针	compass
+com.huawei.hmsapp.gamecenter	游戏中心	gamecenter
+com.huawei.hmsapp.thememanager	主题	themes
+com.huawei.hmsapp.totemweather	天气	weather
+com.huawei.hms.weather	天气服务	weatherservice
+com.ohos.contacts	联系人	contacts
+com.ohos.mms	信息	短信	mms	messages
+com.ohos.callui	电话	拨号	phone	dialer
+cn.wps.mobileoffice.hap	WPS	WPS移动版	wps
+com.alipay.mobile.client	支付宝	alipay
+com.baidu.baiduapp	百度	baidu
+com.dragon.read.next	番茄免费小说	番茄小说	fanqie
+com.fliggy.hmos	飞猪旅行	飞猪	fliggy
+com.jd.hm.mall	京东	jd
+com.kuaishou.hmapp	快手	kuaishou
+com.phoenix.read.next	红果短剧	红果	honguo
+com.quark.ohosbrowser	夸克	夸克浏览器	quark
+com.qunar.hos	去哪儿旅行	去哪儿	qunar
+com.ss.hm.article.news	今日头条	头条	toutiao
+com.ss.hm.ugc.aweme	抖音	douyin
+com.taobao.idlefish4ohos	闲鱼	xianyu
+com.taobao.taobao4hmos	淘宝	taobao
+com.tongcheng.hmos	同程旅行	同程	tongcheng
+com.umetrip.pro.hm.app	航旅纵横Pro	航旅纵横	umetrip
+com.vip.hosapp	唯品会	vipshop
+com.xingin.xhs_hos	小红书	xhs
+com.xunmeng.pinduoduo.hos	拼多多	pdd"""
+
 
 def normalize_alias_key(name: str) -> str:
     return name.lower().strip().replace(" ", "").replace("-", "")
 
 
-def _build_alias_to_packages() -> dict[str, list[str]]:
-    alias_to_packages: dict[str, list[str]] = {}
-    for line in _PACKAGE_ALIAS_LINES.splitlines():
+def _parse_table(raw: str) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -169,43 +231,63 @@ def _build_alias_to_packages() -> dict[str, list[str]]:
         pkg = parts[0].strip()
         if not pkg:
             continue
-        for raw in parts[1:]:
-            s = raw.strip()
+        for raw_alias in parts[1:]:
+            s = raw_alias.strip()
             if not s:
                 continue
             nk = normalize_alias_key(s)
-            if nk not in alias_to_packages:
-                alias_to_packages[nk] = [pkg]
-            elif pkg not in alias_to_packages[nk]:
-                alias_to_packages[nk].append(pkg)
-    return alias_to_packages
+            if nk not in result:
+                result[nk] = [pkg]
+            elif pkg not in result[nk]:
+                result[nk].append(pkg)
+    return result
 
 
-NAME_PACKAGE_DICT = _build_alias_to_packages()
+# Per-transport alias dicts: transport name → {normalized_alias → [pkg, ...]}
+# Kept separate so resolve_open_candidates can return transport-native packages
+# first instead of mixing Android and HarmonyOS bundle names in one list.
+_TRANSPORT_DICTS: dict[str, dict[str, list[str]]] = {
+    "adb": _parse_table(_PACKAGE_ALIAS_LINES),
+    "hdc": _parse_table(_HARMONY_BUNDLE_ALIAS_LINES),
+}
+
+# Task-injected overrides (apply on top of transport dicts), keyed by transport.
+_TASK_OVERRIDES: dict[str, dict[str, list[str]]] = {}
 
 
-def register_task_apps(apps: list[dict]) -> None:
-    """Inject task-specific {name, package} entries into NAME_PACKAGE_DICT.
+def register_task_apps(apps: list[dict], transport: str = "adb") -> None:
+    """Inject task-specific {name, package} entries for a given transport.
 
     Entries from the task's apps list take priority over built-in aliases so
     that open("Mail") resolves to the task-specific package rather than any
     generic alias.  Existing entries for the same normalized key are replaced.
     """
+    overrides = _TASK_OVERRIDES.setdefault(transport, {})
     for app in apps:
         name = str(app.get("name") or "").strip()
         pkg = str(app.get("package") or "").strip()
         if not name or not pkg:
             continue
         nk = normalize_alias_key(name)
-        NAME_PACKAGE_DICT[nk] = [pkg]
+        overrides[nk] = [pkg]
 
 
-def resolve_open_candidates(app_query: str) -> list[str]:
-    """Return ordered package id candidates for an `open` text query."""
+def resolve_open_candidates(app_query: str, transport: str = "adb") -> list[str]:
+    """Return ordered package id candidates for an ``open`` text query.
+
+    *transport* selects which alias table to consult (``"adb"`` for Android,
+    ``"hdc"`` for HarmonyOS).  Task-injected overrides for the same transport
+    take precedence over built-in aliases.
+    """
     q = app_query.strip()
     if not q:
         return []
     if "." in q and "/" not in q and " " not in q:
         return [q]
     nk = normalize_alias_key(q)
-    return list(NAME_PACKAGE_DICT.get(nk, []))
+    overrides = _TASK_OVERRIDES.get(transport, {})
+    if nk in overrides:
+        return list(overrides[nk])
+    table = _TRANSPORT_DICTS.get(transport, {})
+    return list(table.get(nk, []))
+

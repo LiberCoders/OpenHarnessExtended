@@ -184,7 +184,7 @@ class AdbMobileDeviceDriver(MobileDeviceDriver):
         if not list_res.ok:
             return DeviceActionResult(ok=False, results=list_res.results)
         installed = _parse_pm_list_packages(list_res.results[-1].stdout)
-        candidates = resolve_open_candidates(app_query)
+        candidates = resolve_open_candidates(app_query, transport="adb")
         for pkg in candidates:
             if pkg in installed:
                 launch = await self._launch_package(pkg)

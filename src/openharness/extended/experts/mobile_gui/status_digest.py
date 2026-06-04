@@ -53,11 +53,31 @@ def _clip_text(value: object, limit: int = _TEXT_FIELD_LIMIT) -> str:
     return f"{text[:limit]}...<clipped {len(text) - limit} chars; full text in step.json>"
 
 
+def _compact_action(d: dict[str, Any]) -> dict[str, Any]:
+    """Drop None-valued keys from a serialized action dict for the leader payload."""
+    return {k: v for k, v in d.items() if v is not None}
+
+
+def _compact_action_result(d: dict[str, Any]) -> dict[str, Any]:
+    """Trim an action_result dict for the leader: drop action (redundant with
+    adapted_actions by index), null output_path, and empty stderr in commands."""
+    commands = []
+    for cmd in d.get("commands", []):
+        entry = {k: v for k, v in cmd.items() if not (k == "stderr" and not v)}
+        commands.append(entry)
+    result: dict[str, Any] = {
+        "message": d.get("message", ""),
+        "ok": d.get("ok"),
+    }
+    if d.get("output_path") is not None:
+        result["output_path"] = d["output_path"]
+    result["commands"] = commands
+    return result
+
+
 def build_step_event(
     step_payload: dict[str, Any],
     *,
-    last_action: str,
-    status: str,
     state_root: object,
     base_dir: object,
 ) -> dict[str, Any]:
@@ -69,22 +89,32 @@ def build_step_event(
 
     Paths are made directly readable by the leader (cwd-relative when under
     ``base_dir`` = the working directory, else absolute) via ``_readable_path``.
+
+    Fields omitted vs the on-disk step.json:
+    - status: mid-run steps are implicitly running; terminal status lives in result
+    - last_action/message (step level): redundant with action_results entries
+    - action_results[].action: redundant with adapted_actions by index
+    - null/empty noise fields (output_path, stderr, action null coords)
+    - reasoning_content/raw_response when empty
     """
     step = step_payload.get("step")
     step_json_abs = ""
     if isinstance(step, int) and step > 0 and state_root:
         step_json_abs = str(Path(str(state_root)) / "steps" / f"step_{step:04d}" / "step.json")
-    return {
+
+    event: dict[str, Any] = {
         "step": step,
-        "status": status,
-        "last_action": last_action,
-        "message": step_payload.get("message", ""),
         "screenshot_path": _readable_path(step_payload.get("screenshot_path", ""), base_dir),
         "step_json_path": _readable_path(step_json_abs, base_dir),
-        "reasoning_content": _clip_text(step_payload.get("reasoning_content", "")),
-        "raw_response": _clip_text(step_payload.get("raw_response", "")),
-        "parsed_actions": step_payload.get("parsed_actions"),
-        "adapted_actions": step_payload.get("adapted_actions"),
-        "action_results": step_payload.get("action_results"),
+        "parsed_actions": [_compact_action(a) for a in (step_payload.get("parsed_actions") or [])],
+        "adapted_actions": [_compact_action(a) for a in (step_payload.get("adapted_actions") or [])],
+        "action_results": [_compact_action_result(r) for r in (step_payload.get("action_results") or [])],
     }
+    reasoning = _clip_text(step_payload.get("reasoning_content", ""))
+    if reasoning:
+        event["reasoning_content"] = reasoning
+    raw = _clip_text(step_payload.get("raw_response", ""))
+    if raw:
+        event["raw_response"] = raw
+    return event
 

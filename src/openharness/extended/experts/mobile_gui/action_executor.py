@@ -58,16 +58,16 @@ class ActionExecutor:
                 # "unspecified", matching the loop's expert_done_unspecified —
                 # ending without a status is NOT the same as succeeding.
                 context.last_action = f"terminate({action.status or 'unspecified'})"
-                context.last_message = action.message
+                context.last_message = action.text
                 context.done = True
                 break
             if action.action == ActionType.INTERACT:
-                hint = (action.text or action.message or "").strip() or "operator assistance"
+                message = action.text.strip() or "operator assistance"
                 raise UnsupportedActionError(
                     "interact",
                     self._driver.transport_name,
                     detail=(
-                        f"automated worker cannot pause for manual UI; hint={hint!r}. "
+                        f"automated worker cannot pause for manual UI; message={message!r}. "
                         "Complete the step on the device and re-run or extend the worker channel."
                     ),
                 )
@@ -76,9 +76,7 @@ class ActionExecutor:
                 raise UnsupportedActionError(str(action.action), self._driver.transport_name)
 
             action_desc, result = await runner(action)
-            message = _format_result_message(
-                action_desc=action_desc, result=result, action_message=action.message
-            )
+            message = _format_result_message(action_desc=action_desc, result=result)
             results.append(GuiActionResult(action=action, device_result=result, message=message))
             context.last_action = action_desc if result.ok else f"{action_desc}:failed"
             context.last_message = message
@@ -146,9 +144,7 @@ class ActionExecutor:
         return f"key({action.keycode})", await self._driver.keyevent(action.keycode)
 
 
-def _format_result_message(
-    *, action_desc: str, result: DeviceActionResult, action_message: str
-) -> str:
+def _format_result_message(*, action_desc: str, result: DeviceActionResult) -> str:
     parts = [f"{action_desc}: {'ok' if result.ok else 'failed'}"]
     multi = len(result.results) > 1
     for idx, cmd_result in enumerate(result.results, start=1):
@@ -161,6 +157,4 @@ def _format_result_message(
                 f"stderr{sfx}={cmd_result.stderr or '(empty)'}",
             ]
         )
-    if action_message:
-        parts.append(f"note={action_message}")
     return " | ".join(parts)

@@ -187,8 +187,8 @@ class ExpertLoopPack:
                 "screenshot_path": self.context.last_screenshot,
                 "raw_response": outcome.raw_response,
                 "reasoning_content": outcome.reasoning_content,
-                "parsed_actions": [a.to_dict() for a in outcome.parsed_actions],
-                "adapted_actions": [a.to_dict() for a in outcome.adapted_actions],
+                "parsed_actions": [a.to_dict(omit_none=False) for a in outcome.parsed_actions],
+                "adapted_actions": [a.to_dict(omit_none=False) for a in outcome.adapted_actions],
                 "action_results": [r.to_dict() for r in results],
                 "model_request": _truncate_model_request(outcome.model_request),
             }
@@ -234,8 +234,6 @@ class ExpertLoopPack:
                 "step",
                 build_step_event(
                     step_payload,
-                    last_action=self.context.last_action,
-                    status=status,
                     state_root=self.store.root,
                     base_dir=cfg.cwd,
                 ),

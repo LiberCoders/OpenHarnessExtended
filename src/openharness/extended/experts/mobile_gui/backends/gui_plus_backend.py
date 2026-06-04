@@ -536,19 +536,19 @@ def _parse_key(payload: dict[str, Any]) -> GuiAction:
 
 
 def _parse_interact(payload: dict[str, Any]) -> GuiAction:
-    text = str(payload.get("text") or payload.get("message") or "").strip()
+    text = str(payload.get("text") or "").strip()
     return GuiAction(action=ActionType.INTERACT, text=text)
 
 
 def _parse_answer(payload: dict[str, Any]) -> GuiAction:
-    message = str(payload.get("text") or payload.get("message") or "")
-    return GuiAction(action=ActionType.TERMINATE, status="success", message=message)
+    text = str(payload.get("text") or "")
+    return GuiAction(action=ActionType.TERMINATE, status="success", text=text)
 
 
 def _parse_terminate(payload: dict[str, Any]) -> GuiAction:
     status = str(payload.get("status") or "success")
-    message = str(payload.get("message") or payload.get("text") or "")
-    return GuiAction(action=ActionType.TERMINATE, status=status, message=message)
+    text = str(payload.get("message") or "")
+    return GuiAction(action=ActionType.TERMINATE, status=status, text=text)
 
 
 _ACTION_PARSERS: dict[str, Any] = {

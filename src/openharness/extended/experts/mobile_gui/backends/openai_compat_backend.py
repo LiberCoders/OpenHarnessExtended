@@ -407,17 +407,17 @@ def _parse_system_button(args: dict[str, Any]) -> GuiAction:
 
 def _parse_terminate(args: dict[str, Any]) -> GuiAction:
     status = str(args.get("status") or "success")
-    message = str(args.get("message") or args.get("text") or "")
-    return GuiAction(action=ActionType.TERMINATE, status=status, message=message)
+    text = str(args.get("message") or "")
+    return GuiAction(action=ActionType.TERMINATE, status=status, text=text)
 
 
 def _parse_answer(args: dict[str, Any]) -> GuiAction:
-    message = str(args.get("text") or args.get("message") or "")
-    return GuiAction(action=ActionType.TERMINATE, status="success", message=message)
+    text = str(args.get("text") or "")
+    return GuiAction(action=ActionType.TERMINATE, status="success", text=text)
 
 
 def _parse_interact(args: dict[str, Any]) -> GuiAction:
-    text = str(args.get("text") or args.get("message") or "").strip()
+    text = str(args.get("text") or "").strip()
     return GuiAction(action=ActionType.INTERACT, text=text)
 
 

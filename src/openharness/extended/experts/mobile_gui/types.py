@@ -60,12 +60,15 @@ class GuiAction:
     seconds: float | None = None
     keycode: int | None = None
     status: str | None = None
-    message: str = ""
-    text: str = ""
+    text: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        """JSON-serializable view used for step journaling / leader events."""
-        return {
+    def to_dict(self, *, omit_none: bool = True) -> dict[str, Any]:
+        """JSON-serializable view used for step journaling / leader events.
+
+        By default (omit_none=True) None-valued fields are dropped to keep
+        the payload lean. Pass omit_none=False to get every field explicitly.
+        """
+        full: dict[str, Any] = {
             # ActionType is a str-Enum; store its plain value. getattr keeps this
             # robust if a raw string ever slips in — journaling must not crash.
             "action": getattr(self.action, "value", self.action),
@@ -75,10 +78,12 @@ class GuiAction:
             "y2": self.y2,
             "seconds": self.seconds,
             "status": self.status,
-            "message": self.message,
             "text": self.text,
             "keycode": self.keycode,
         }
+        if not omit_none:
+            return full
+        return {k: v for k, v in full.items() if v is not None}
 
 
 @dataclass

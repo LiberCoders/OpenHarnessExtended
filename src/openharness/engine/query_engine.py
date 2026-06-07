@@ -262,6 +262,7 @@ class QueryEngine:
             tool_metadata=self._tool_metadata,
         )
         query_messages = list(self._messages)
+        _base_len = len(query_messages)
         coordinator_context = self._build_coordinator_context_message()
         if coordinator_context is not None:
             query_messages.append(coordinator_context)
@@ -273,6 +274,12 @@ class QueryEngine:
                     self._cost_tracker.add(usage)
                 yield event
         finally:
+            # Sync back messages committed to query_messages but not yet in self._messages
+            # (e.g., tool results added between turns when CancelledError fires).
+            # Use _base_len to exclude the ephemeral coordinator_context from the threshold.
+            _coord_offset = 1 if coordinator_context is not None else 0
+            if len(query_messages) > _base_len + _coord_offset:
+                self._messages = list(query_messages)
             await self._update_session_memory()
             await self._extract_durable_memories()
             self._schedule_auto_dream()

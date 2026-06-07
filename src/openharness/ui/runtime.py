@@ -941,15 +941,15 @@ async def handle_line(
             finally:
                 if result.submit_model:
                     bundle.engine.set_model(original_model)
-            bundle.session_backend.save_snapshot(
-                cwd=bundle.cwd,
-                model=bundle.engine.model,
-                system_prompt=system_prompt,
-                messages=bundle.engine.messages,
-                usage=bundle.engine.total_usage,
-                session_id=bundle.session_id,
-                tool_metadata=bundle.engine.tool_metadata,
-            )
+                bundle.session_backend.save_snapshot(
+                    cwd=bundle.cwd,
+                    model=bundle.engine.model,
+                    system_prompt=system_prompt,
+                    messages=bundle.engine.messages,
+                    usage=bundle.engine.total_usage,
+                    session_id=bundle.session_id,
+                    tool_metadata=bundle.engine.tool_metadata,
+                )
         if result.continue_pending:
             settings = bundle.current_settings()
             if bundle.enforce_max_turns:
@@ -972,15 +972,16 @@ async def handle_line(
                 pending = _format_pending_tool_results(bundle.engine.messages)
                 if pending:
                     await print_system(pending)
-            bundle.session_backend.save_snapshot(
-                cwd=bundle.cwd,
-                model=settings.model,
-                system_prompt=system_prompt,
-                messages=bundle.engine.messages,
-                usage=bundle.engine.total_usage,
-                session_id=bundle.session_id,
-                tool_metadata=bundle.engine.tool_metadata,
-            )
+            finally:
+                bundle.session_backend.save_snapshot(
+                    cwd=bundle.cwd,
+                    model=settings.model,
+                    system_prompt=system_prompt,
+                    messages=bundle.engine.messages,
+                    usage=bundle.engine.total_usage,
+                    session_id=bundle.session_id,
+                    tool_metadata=bundle.engine.tool_metadata,
+                )
         sync_app_state(bundle)
         return not result.should_exit
 
@@ -1014,6 +1015,7 @@ async def handle_line(
         pending = _format_pending_tool_results(bundle.engine.messages)
         if pending:
             await print_system(pending)
+    finally:
         bundle.session_backend.save_snapshot(
             cwd=bundle.cwd,
             model=settings.model,
@@ -1024,17 +1026,6 @@ async def handle_line(
             tool_metadata=bundle.engine.tool_metadata,
         )
         sync_app_state(bundle)
-        return True
-    bundle.session_backend.save_snapshot(
-        cwd=bundle.cwd,
-        model=settings.model,
-        system_prompt=system_prompt,
-        messages=bundle.engine.messages,
-        usage=bundle.engine.total_usage,
-        session_id=bundle.session_id,
-        tool_metadata=bundle.engine.tool_metadata,
-    )
-    sync_app_state(bundle)
     return True
 
 

@@ -145,15 +145,16 @@ async def submit_follow_up(
         pending = _format_pending_tool_results(bundle.engine.messages)
         if pending:
             await print_system(pending)
-    bundle.session_backend.save_snapshot(
-        cwd=bundle.cwd,
-        model=settings.model,
-        system_prompt=system_prompt,
-        messages=bundle.engine.messages,
-        usage=bundle.engine.total_usage,
-        session_id=bundle.session_id,
-        tool_metadata=bundle.engine.tool_metadata,
-    )
+    finally:
+        bundle.session_backend.save_snapshot(
+            cwd=bundle.cwd,
+            model=settings.model,
+            system_prompt=system_prompt,
+            messages=bundle.engine.messages,
+            usage=bundle.engine.total_usage,
+            session_id=bundle.session_id,
+            tool_metadata=bundle.engine.tool_metadata,
+        )
 
 
 async def drain_coordinator_async_agents(

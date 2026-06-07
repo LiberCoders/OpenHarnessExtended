@@ -85,7 +85,6 @@ def save_session_snapshot(
     session_dir = get_project_session_dir(cwd)
     sid = session_id or uuid4().hex[:12]
     now = time.time()
-    timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime(now))
     messages = sanitize_conversation_messages(messages)
     # Extract a summary from the first user message
     summary = ""
@@ -112,8 +111,14 @@ def save_session_snapshot(
     latest_path = session_dir / "latest.json"
     atomic_write_text(latest_path, data)
 
-    # Save by session ID
-    session_path = session_dir / f"session-{timestamp}-{sid}.json"
+    # Reuse the existing session file for this session_id to avoid creating a new
+    # timestamped file on every save (e.g. after an Esc-interrupt during a session).
+    existing = sorted(session_dir.glob(f"session-*-{sid}.json"))
+    if existing:
+        session_path = existing[0]
+    else:
+        timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime(now))
+        session_path = session_dir / f"session-{timestamp}-{sid}.json"
     atomic_write_text(session_path, data)
 
     return latest_path

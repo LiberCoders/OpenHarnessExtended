@@ -210,6 +210,7 @@ def _run_git_command(cwd: str, *args: str) -> tuple[bool, str]:
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=False,
         )
     except FileNotFoundError:
@@ -227,7 +228,7 @@ def _copy_to_clipboard(text: str) -> tuple[bool, str]:
     except Exception:
         for command in (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard"]):
             try:
-                subprocess.run(command, input=text, text=True, check=True, capture_output=True)
+                subprocess.run(command, input=text, text=True, encoding="utf-8", check=True, capture_output=True)
                 return True, "clipboard"
             except Exception:
                 continue

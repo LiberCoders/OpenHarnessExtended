@@ -28,8 +28,17 @@ def resolve_shell_command(
             return [bash, "-lc", command]
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell:
-            return [powershell, "-NoLogo", "-NoProfile", "-Command", command]
-        return [shutil.which("cmd.exe") or "cmd.exe", "/d", "/s", "/c", command]
+            # Force UTF-8 for both the PowerShell console and any Python child
+            # processes (PYTHONUTF8=1 makes Python use UTF-8 for stdin/stdout/stderr
+            # regardless of the system locale, which is GBK on Chinese Windows).
+            utf8_cmd = (
+                f"$env:PYTHONUTF8='1'; "
+                f"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+                f"{command}"
+            )
+            return [powershell, "-NoLogo", "-NoProfile", "-Command", utf8_cmd]
+        # cmd.exe: switch to codepage 65001 (UTF-8) for the same reason.
+        return [shutil.which("cmd.exe") or "cmd.exe", "/d", "/s", "/c", f"chcp 65001 > nul 2>&1 & set PYTHONUTF8=1 & {command}"]
 
     bash = shutil.which("bash")
     if bash:

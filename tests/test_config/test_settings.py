@@ -32,6 +32,8 @@ class TestSettings:
         assert s.permission.mode == "default"
         assert s.sandbox.enabled is False
         assert s.sandbox.filesystem.allow_write == ["."]
+        assert s.web.resolution_mode == "auto"
+        assert s.web.synthetic_dns_cidrs == []
 
     def test_resolve_api_key_from_instance(self):
         s = Settings(api_key="sk-test-123")
@@ -77,6 +79,17 @@ class TestSettings:
         updated = s.merge_cli_overrides(permission_mode="full_auto")
         assert updated.permission.mode == "full_auto"
         assert s.permission.mode == "default"
+
+    def test_web_settings_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("OPENHARNESS_WEB_PROXY", "http://proxy.example.com:7890")
+        monkeypatch.setenv("OPENHARNESS_WEB_RESOLUTION_MODE", "synthetic_dns")
+        monkeypatch.setenv("OPENHARNESS_WEB_SYNTHETIC_DNS_CIDRS", "100.64.0.0/10,203.0.113.0/24")
+
+        updated = _apply_env_overrides(Settings())
+
+        assert updated.web.proxy == "http://proxy.example.com:7890"
+        assert updated.web.resolution_mode == "synthetic_dns"
+        assert updated.web.synthetic_dns_cidrs == ["100.64.0.0/10", "203.0.113.0/24"]
 
     def test_merge_cli_overrides_returns_new_instance(self):
         s = Settings()
@@ -329,6 +342,46 @@ class TestLoadSaveSettings:
         assert updated.model == "gpt-5.4"
         assert profile.provider == "openai_codex"
         assert profile.auth_source == "codex_subscription"
+
+    def test_merge_cli_active_profile_with_model_keeps_target_profile_auth(self):
+        settings = Settings(
+            active_profile="moonshot",
+            provider="moonshot",
+            api_format="openai",
+            base_url="https://api.moonshot.cn/v1",
+            model="kimi-k2.5",
+            profiles={
+                "moonshot": ProviderProfile(
+                    label="Moonshot",
+                    provider="moonshot",
+                    api_format="openai",
+                    auth_source="moonshot_api_key",
+                    default_model="kimi-k2.5",
+                    last_model="kimi-k2.5",
+                    base_url="https://api.moonshot.cn/v1",
+                ),
+                "codex": ProviderProfile(
+                    label="Codex Subscription",
+                    provider="openai_codex",
+                    api_format="openai",
+                    auth_source="codex_subscription",
+                    default_model="gpt-5.4",
+                    last_model="gpt-5.4",
+                ),
+            },
+        )
+
+        updated = settings.merge_cli_overrides(active_profile="codex", model="gpt-5.5")
+        profile_name, profile = updated.resolve_profile()
+
+        assert profile_name == "codex"
+        assert updated.provider == "openai_codex"
+        assert updated.api_format == "openai"
+        assert updated.base_url is None
+        assert updated.model == "gpt-5.5"
+        assert profile.provider == "openai_codex"
+        assert profile.auth_source == "codex_subscription"
+        assert profile.last_model == "gpt-5.5"
 
     def test_merge_cli_active_profile_keeps_profile_compact_threshold_settings(self):
         settings = Settings(

@@ -156,6 +156,14 @@ class SandboxSettings(BaseModel):
     docker: DockerSandboxSettings = Field(default_factory=DockerSandboxSettings)
 
 
+class WebSettings(BaseModel):
+    """Outbound web tool configuration."""
+
+    proxy: str | None = None
+    resolution_mode: str = "auto"
+    synthetic_dns_cidrs: list[str] = Field(default_factory=list)
+
+
 class ProviderProfile(BaseModel):
     """Named provider workflow configuration."""
 
@@ -625,6 +633,7 @@ class Settings(BaseModel):
     hooks: dict[str, list[HookDefinition]] = Field(default_factory=dict)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+    web: WebSettings = Field(default_factory=WebSettings)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     allow_project_plugins: bool = False
     allow_project_skills: bool = True
@@ -916,20 +925,24 @@ class Settings(BaseModel):
         """Return a new Settings with CLI overrides applied (non-None values only)."""
         updates = {k: v for k, v in overrides.items() if v is not None}
         permission_mode = updates.pop("permission_mode", None)
+
+        def apply_permission_mode(settings: Settings) -> Settings:
+            if permission_mode is None:
+                return settings
+            return settings.model_copy(
+                update={
+                    "permission": settings.permission.model_copy(
+                        update={"mode": PermissionMode(str(permission_mode))}
+                    )
+                }
+            )
+
         # Strip ANSI escape sequences from model name if present
         if "model" in updates and isinstance(updates["model"], str):
             updates["model"] = strip_ansi_escape_sequences(updates["model"])
         if "effort" in updates and isinstance(updates["effort"], str):
             updates["effort"] = "xhigh" if updates["effort"].strip().lower() == "max" else updates["effort"].strip().lower()
-        merged = self.model_copy(update=updates)
-        if permission_mode is not None:
-            merged = merged.model_copy(
-                update={
-                    "permission": merged.permission.model_copy(
-                        update={"mode": PermissionMode(str(permission_mode))}
-                    )
-                }
-            )
+        merged = apply_permission_mode(self.model_copy(update=updates))
         if not updates:
             return merged
         profile_keys = {
@@ -947,8 +960,25 @@ class Settings(BaseModel):
         profile_updates = profile_keys.intersection(updates)
         if not profile_updates:
             return merged
-        if profile_updates.issubset({"active_profile"}):
-            return merged.materialize_active_profile()
+        if "active_profile" in profile_updates:
+            switch_updates = {
+                key: value
+                for key, value in updates.items()
+                if key not in profile_keys or key in {"active_profile", "profiles"}
+            }
+            switched = apply_permission_mode(self.model_copy(update=switch_updates)).materialize_active_profile()
+            remaining_profile_updates = {
+                key: value
+                for key, value in updates.items()
+                if key in profile_keys and key not in {"active_profile", "profiles"}
+            }
+            if not remaining_profile_updates:
+                return switched
+            return (
+                switched.model_copy(update=remaining_profile_updates)
+                .sync_active_profile_from_flat_fields()
+                .materialize_active_profile()
+            )
         return merged.sync_active_profile_from_flat_fields().materialize_active_profile()
 
 
@@ -1051,6 +1081,23 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         )
     if sandbox_updates:
         updates["sandbox"] = settings.sandbox.model_copy(update=sandbox_updates)
+
+    web_updates: dict[str, Any] = {}
+    web_proxy = os.environ.get("OPENHARNESS_WEB_PROXY")
+    if web_proxy:
+        web_updates["proxy"] = web_proxy
+    web_resolution_mode = os.environ.get("OPENHARNESS_WEB_RESOLUTION_MODE")
+    if web_resolution_mode:
+        web_updates["resolution_mode"] = web_resolution_mode
+    web_synthetic_dns_cidrs = os.environ.get("OPENHARNESS_WEB_SYNTHETIC_DNS_CIDRS")
+    if web_synthetic_dns_cidrs:
+        web_updates["synthetic_dns_cidrs"] = [
+            entry.strip()
+            for entry in web_synthetic_dns_cidrs.split(",")
+            if entry.strip()
+        ]
+    if web_updates:
+        updates["web"] = settings.web.model_copy(update=web_updates)
 
     if not updates:
         return settings

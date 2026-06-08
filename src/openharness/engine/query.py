@@ -153,6 +153,7 @@ class QueryContext:
     max_turns: int | None = 200
     hook_executor: HookExecutor | None = None
     tool_metadata: dict[str, object] | None = None
+    active_work_checker: Callable[[], Awaitable[str | None]] | None = None
 
 
 def _append_capped_unique(bucket: list[Any], value: Any, *, limit: int) -> None:
@@ -825,6 +826,11 @@ async def run_query(
             messages.append(coordinator_context_message)
 
         if not final_message.tool_uses:
+            if context.active_work_checker is not None:
+                pending_msg = await context.active_work_checker()
+                if pending_msg is not None:
+                    messages.append(ConversationMessage(role="user", content=[TextBlock(text=pending_msg)]))
+                    continue
             if context.hook_executor is not None:
                 await context.hook_executor.execute(
                     HookEvent.STOP,

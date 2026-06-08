@@ -53,6 +53,15 @@ StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 ClearHandler = Callable[[], Awaitable[None]]
 
 
+def _make_active_work_checker():
+    """Return an active_work_checker for QueryEngine, or None if extended is unavailable."""
+    try:
+        from openharness.extended.channel.expert_waiter import make_expert_waiter
+        return make_expert_waiter()
+    except ImportError:
+        return None
+
+
 def _resolve_image_generation_config(settings) -> dict[str, str]:
     """Resolve image generation configuration from settings, environment, and Codex auth."""
     from openharness.config.settings import ImageGenerationConfig, ProviderProfile
@@ -418,6 +427,7 @@ async def build_runtime(
         ask_user_prompt=ask_user_prompt,
         hook_executor=hook_executor,
         settings=settings,
+        active_work_checker=_make_active_work_checker(),
         tool_metadata={
             "mcp_manager": mcp_manager,
             "bridge_manager": bridge_manager,

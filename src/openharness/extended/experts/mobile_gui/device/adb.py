@@ -180,23 +180,21 @@ class AdbMobileDeviceDriver(MobileDeviceDriver):
                     )
                 ],
             )
-        list_res = await self.list_user_packages()
-        if not list_res.ok:
-            return DeviceActionResult(ok=False, results=list_res.results)
-        installed = _parse_pm_list_packages(list_res.results[-1].stdout)
         candidates = resolve_open_candidates(app_query, transport="adb")
+        if not candidates and "." in app_query and "/" not in app_query and " " not in app_query:
+            candidates = [app_query]
+        last: DeviceActionResult | None = None
         for pkg in candidates:
-            if pkg in installed:
-                launch = await self._launch_package(pkg)
-                return DeviceActionResult(ok=launch.ok, results=[*list_res.results, *launch.results])
-        if "." in app_query and "/" not in app_query and " " not in app_query:
-            launch = await self._launch_package(app_query)
-            return DeviceActionResult(ok=launch.ok, results=[*list_res.results, *launch.results])
+            launch = await self._launch_package(pkg)
+            if launch.ok:
+                return launch
+            last = launch
+        if last is not None:
+            return last
         msg = f"no installed package matched query={app_query!r}; candidates={candidates[:5]}"
         return DeviceActionResult(
             ok=False,
             results=[
-                *list_res.results,
                 DeviceCommandResult(
                     command="adb:open",
                     exit_code=-1,

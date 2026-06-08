@@ -214,6 +214,81 @@ com.vip.hosapp	唯品会	vipshop
 com.xingin.xhs_hos	小红书	xhs
 com.xunmeng.pinduoduo.hos	拼多多	pdd"""
 
+# Pre-queried mainElementName for known HarmonyOS built-in apps.
+# Used by the hdc driver to skip the bm-dump round-trip on launch.
+# Values sourced from `bm dump -n <bundle>` → mainElementName field.
+_HARMONY_MAIN_ABILITIES: dict[str, str] = {
+    "com.huawei.hmos.settings":          "com.huawei.hmos.settings.MainAbility",
+    "com.huawei.hmos.camera":            "com.huawei.hmos.camera.MainAbility",
+    "com.huawei.hmos.photos":            "com.huawei.hmos.photos.MainAbility",
+    "com.huawei.hmos.browser":           "MainAbility",
+    "com.huawei.hmos.email":             "EntryAbility",
+    "com.huawei.hmos.calendar":          "MainAbility",
+    "com.huawei.hmos.clock":             "com.huawei.hmos.clock.phone",
+    "com.huawei.hmos.calculator":        "CalculatorAbility",
+    "com.huawei.hmos.notepad":           "MainAbility",
+    "com.huawei.hmos.filemanager":       "MainAbility",
+    "com.huawei.hmos.files":             "EntryAbility",
+    "com.huawei.hmos.videoplayer":       "EntryAbility",
+    "com.huawei.hmos.maps.app":          "EntryAbility",
+    "com.huawei.hmos.health":            "Activity_card_entryAbility",
+    "com.huawei.hmos.wallet":            "MainAbility",
+    "com.huawei.hmos.clouddrive":        "MainAbility",
+    "com.huawei.hmos.meetime":           "MainAbility",
+    "com.huawei.hmos.myhuawei":          "EntryAbility",
+    "com.huawei.hmos.vmall":             "EntranceAbility",
+    "com.huawei.hmos.vassistant.launcher": "VoiceAbility",
+    "com.huawei.hmos.inputmethod":       "MainAbility",
+    "com.huawei.hmos.databackup":        "EntryAbility",
+    "com.huawei.hmsapp.music":           "MainAbility",
+    "com.huawei.hmsapp.books":           "MainAbility",
+    "com.huawei.hmsapp.compass":         "EntryAbility",
+    "com.huawei.hmsapp.gamecenter":      "EntryAbility",
+    "com.huawei.hmsapp.thememanager":    "MainAbility",
+    "com.huawei.hmsapp.totemweather":    "com.huawei.hmsapp.totemweather.MainAbility",
+    "com.ohos.contacts":                 "com.ohos.contacts.MainAbility",
+    "com.ohos.mms":                      "com.ohos.mms.MainAbility",
+    "com.ohos.callui":                   "com.ohos.callui.MainAbility",
+    "com.ss.hm.ugc.aweme":              "MainAbility",
+    "com.ss.hm.article.news":           "MainAbility",
+    "com.kuaishou.hmapp":               "EntryAbility",
+    "com.xunmeng.pinduoduo.hos":        "EntryAbility",
+    "com.quark.ohosbrowser":            "EntryAbility",
+    "com.jd.hm.mall":                   "EntryAbility",
+    "com.alipay.mobile.client":         "EntryAbility",
+}
+
+
+def get_main_ability_hint(bundle: str) -> str | None:
+    """Return the pre-known entry ability for a bundle, or None to trigger bm dump."""
+    return _HARMONY_MAIN_ABILITIES.get(bundle)
+
+
+# Apps where aa start is permanently blocked by system permissions (error 10107102).
+# The tuple is (ability_name_attempted, stdout_that_would_be_returned) — the driver
+# returns this as a synthetic DeviceCommandResult without making a device round-trip,
+# so the model sees the real error code and can decide how to proceed.
+_LAUNCH_BLOCKED_STDOUT = (
+    "error: failed to start ability.\r\n"
+    "Error Code:10107102  Error Message:The specified process does not have the permission\r\n"
+    "Error cause: The specified process does not have the permission to start the ability.\r\n"
+    "  Try the following:\r\n"
+    "  > Use an alternative path such as navigating via the launcher or Settings"
+)
+_HARMONY_LAUNCH_BLOCKED: dict[str, str] = {
+    # aa start blocked by Huawei system permission; no ability name works from hdc shell.
+    "com.huawei.hmos.soundrecorder": "MainAbility",
+    "com.huawei.hmos.applock":       "AppLockAbility",
+}
+
+
+def get_launch_block(bundle: str) -> tuple[str, str] | None:
+    """Return (ability, error_stdout) for bundles permanently blocked by system permissions."""
+    ability = _HARMONY_LAUNCH_BLOCKED.get(bundle)
+    if ability is None:
+        return None
+    return ability, _LAUNCH_BLOCKED_STDOUT
+
 
 def normalize_alias_key(name: str) -> str:
     return name.lower().strip().replace(" ", "").replace("-", "")

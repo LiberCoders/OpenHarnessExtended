@@ -95,15 +95,44 @@ async def test_keyevent_uses_uinput_key_down_up() -> None:
 @pytest.mark.asyncio
 async def test_open_app_launches_bundle_via_aa_start() -> None:
     driver, calls = _driver_with_recorded_runs()
+    # notepad is in the hint table → no bm dump, direct explicit launch
+    result = await driver.open_app("com.huawei.hmos.notepad")
+    assert result.ok is True
+    assert calls == [["shell", "aa", "start", "-b", "com.huawei.hmos.notepad", "-a", "MainAbility"]]
+
+
+@pytest.mark.asyncio
+async def test_open_app_uses_bm_dump_for_unknown_bundle() -> None:
+    """Bundles not in the hint table trigger a bm dump query before launching."""
+    driver = HdcMobileDeviceDriver(cwd=Path("."))
+    driver._hdc_bin = "hdc"
+    calls: list[list[str]] = []
+
+    async def fake_run(tail_args: list[str]) -> DeviceCommandResult:
+        calls.append(tail_args)
+        if tail_args[:3] == ["shell", "bm", "dump"]:
+            return DeviceCommandResult(
+                command="hdc " + " ".join(tail_args),
+                exit_code=0,
+                stdout='"mainElementName": "MainAbility",',
+                stderr="",
+                ok=True,
+            )
+        return DeviceCommandResult(
+            command="hdc " + " ".join(tail_args), exit_code=0, stdout="", stderr="", ok=True
+        )
+
+    driver._run = fake_run  # type: ignore[method-assign]
     result = await driver.open_app("com.example.app")
     assert result.ok is True
-    assert calls[0] == ["shell", "aa", "start", "-b", "com.example.app"]
+    assert calls[0] == ["shell", "bm", "dump", "-n", "com.example.app"]
+    assert calls[1] == ["shell", "aa", "start", "-b", "com.example.app", "-a", "MainAbility"]
 
 
 @pytest.mark.asyncio
 async def test_open_app_rejects_non_bundle_query_as_soft_failure() -> None:
     driver, calls = _driver_with_recorded_runs()
-    result = await driver.open_app("Settings")  # human name, not a bundle
+    result = await driver.open_app("NonExistentFakeApp")  # not in any alias table, not a bundle
     assert result.ok is False
     assert calls == []
     assert "bundle name" in result.results[0].stderr

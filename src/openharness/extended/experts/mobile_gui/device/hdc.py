@@ -8,7 +8,11 @@ import shutil
 from pathlib import Path
 
 from openharness.extended.experts.mobile_gui.device.base import MobileDeviceDriver
-from openharness.extended.experts.mobile_gui.device.package_aliases import resolve_open_candidates
+from openharness.extended.experts.mobile_gui.device.package_aliases import (
+    get_launch_block,
+    get_main_ability_hint,
+    resolve_open_candidates,
+)
 from openharness.extended.experts.mobile_gui.device.results import DeviceActionResult, DeviceCommandResult
 
 # `uinput -T -m` smooth time is the gesture duration in ms (default 1000, max 15000).
@@ -22,6 +26,11 @@ _DEFAULT_DRAG_MS = 1000
 # HarmonyOS navigation keycodes (@ohos.multimodalInput.keyCode), verified on-device.
 _KEYCODE_HOME = 1
 _KEYCODE_BACK = 2
+
+
+def _aa_launch_ok(result: DeviceCommandResult) -> bool:
+    """hdc shell exits 0 even when aa reports failure; check stdout for error markers."""
+    return result.ok and not result.stdout.startswith("error:")
 
 
 class HdcMobileDeviceDriver(MobileDeviceDriver):
@@ -125,6 +134,19 @@ class HdcMobileDeviceDriver(MobileDeviceDriver):
     async def back(self) -> DeviceActionResult:
         return await self.keyevent(_KEYCODE_BACK)
 
+    async def _query_main_ability(self, bundle: str) -> str | None:
+        """Return the bundle's declared mainElementName via bm dump, or None."""
+        try:
+            r = await self._run(["shell", "bm", "dump", "-n", bundle])
+            for line in r.stdout.splitlines():
+                if '"mainElementName"' in line:
+                    value = line.split(":", 1)[1].strip().strip('",')
+                    if value:
+                        return value
+        except Exception:
+            pass
+        return None
+
     async def open_app(self, app_or_package: str) -> DeviceActionResult:
         self._require_hdc_available()
         query = (app_or_package or "").strip()
@@ -134,22 +156,40 @@ class HdcMobileDeviceDriver(MobileDeviceDriver):
                 results=[DeviceCommandResult(command="hdc:open", exit_code=-1, stdout="", stderr="empty app query", ok=False)],
             )
         candidates = resolve_open_candidates(query, transport="hdc")
-        bundle = candidates[0] if candidates else query
-        result = await self._run(["shell", "aa", "start", "-b", bundle])
-        if result.ok:
-            return DeviceActionResult(ok=True, results=[result])
-        # If the first candidate failed and there are more, try them in order.
-        for alt in candidates[1:]:
-            r = await self._run(["shell", "aa", "start", "-b", alt])
-            if r.ok:
-                return DeviceActionResult(ok=True, results=[result, r])
         if not candidates:
             msg = f"no bundle alias found for {query!r}; pass a bundle name directly (e.g. com.example.app)"
-        else:
-            msg = f"aa start failed for all candidates {candidates} (query={query!r})"
+            return DeviceActionResult(
+                ok=False,
+                results=[DeviceCommandResult(command="hdc:open", exit_code=-1, stdout="", stderr=msg, ok=False)],
+            )
+        first_result = None
+        for bundle in candidates:
+            blocked = get_launch_block(bundle)
+            if blocked:
+                ability, err_stdout = blocked
+                r = DeviceCommandResult(
+                    command=f"aa start -b {bundle} -a {ability}",
+                    exit_code=0,
+                    stdout=err_stdout,
+                    stderr="",
+                    ok=False,
+                )
+            else:
+                main_ability = get_main_ability_hint(bundle) or await self._query_main_ability(bundle)
+                cmd = (
+                    ["shell", "aa", "start", "-b", bundle, "-a", main_ability]
+                    if main_ability
+                    else ["shell", "aa", "start", "-b", bundle]
+                )
+                r = await self._run(cmd)
+            if first_result is None:
+                first_result = r
+            if _aa_launch_ok(r):
+                return DeviceActionResult(ok=True, results=[r])
+        msg = f"aa start failed for all candidates {candidates} (query={query!r})"
         return DeviceActionResult(
             ok=False,
-            results=[result, DeviceCommandResult(command="hdc:open", exit_code=-1, stdout="", stderr=msg, ok=False)],
+            results=[first_result, DeviceCommandResult(command="hdc:open", exit_code=-1, stdout="", stderr=msg, ok=False)],
         )
 
     async def wait(self, seconds: float) -> DeviceActionResult:

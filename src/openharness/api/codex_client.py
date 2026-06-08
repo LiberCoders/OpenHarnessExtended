@@ -116,7 +116,7 @@ def _convert_messages_to_codex(messages: list[ConversationMessage]) -> list[dict
                     "id": f"fc_{block.id[:58]}",
                     "call_id": block.id,
                     "name": block.name,
-                    "arguments": json.dumps(block.input, separators=(",", ":")),
+                    "arguments": json.dumps(block.input, separators=(",", ":"), ensure_ascii=False),
                 })
     return result
 

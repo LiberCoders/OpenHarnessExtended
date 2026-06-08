@@ -233,7 +233,7 @@ def _convert_assistant_message(msg: ConversationMessage) -> dict[str, Any]:
                 "type": "function",
                 "function": {
                     "name": tu.name,
-                    "arguments": json.dumps(tu.input),
+                    "arguments": json.dumps(tu.input, ensure_ascii=False),
                 },
             }
             for tu in tool_uses

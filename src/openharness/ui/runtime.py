@@ -799,7 +799,7 @@ def _format_pending_tool_results(messages: list[ConversationMessage]) -> str | N
     for tr in tool_results[:max_results]:
         tu = tool_uses_by_id.get(tr.tool_use_id)
         if tu is not None:
-            raw_input = json.dumps(tu.input, ensure_ascii=True, sort_keys=True)
+            raw_input = json.dumps(tu.input, ensure_ascii=False, sort_keys=True)
             lines.append(
                 f"- {tu.name} {_truncate(raw_input, 200)} -> {_truncate(tr.content.strip(), 400)}"
             )

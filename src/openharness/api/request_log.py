@@ -27,6 +27,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 _LOG_FILENAME = "llm_requests.jsonl"
+_RESPONSE_LOG_FILENAME = "llm_responses.jsonl"
 
 
 def log_request(provider: str, payload: dict[str, Any]) -> None:
@@ -54,3 +55,22 @@ def log_request(provider: str, payload: dict[str, Any]) -> None:
             fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception as exc:  # pragma: no cover - never break the API call
         log.debug("Failed to append LLM request log: %s", exc)
+
+
+def log_response(provider: str, payload: dict[str, Any]) -> None:
+    """Append one JSON record describing a model response (best-effort)."""
+    try:
+        from openharness.config.paths import get_logs_dir
+
+        logs_dir = get_logs_dir()
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        path = logs_dir / _RESPONSE_LOG_FILENAME
+        record = {
+            "ts": time.time(),
+            "provider": provider,
+            "payload": payload,
+        }
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception as exc:  # pragma: no cover - never break the API call
+        log.debug("Failed to append LLM response log: %s", exc)

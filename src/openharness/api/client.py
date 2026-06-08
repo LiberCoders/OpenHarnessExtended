@@ -255,6 +255,20 @@ class AnthropicApiClient:
             raise _translate_api_error(exc) from exc
 
         usage = getattr(final_message, "usage", None)
+        from openharness.api.request_log import log_response
+        log_response("anthropic", {
+            "stop_reason": getattr(final_message, "stop_reason", None),
+            "content": [
+                {"type": getattr(b, "type", None), "text": getattr(b, "text", None),
+                 "id": getattr(b, "id", None), "name": getattr(b, "name", None),
+                 "input": getattr(b, "input", None)}
+                for b in (getattr(final_message, "content", None) or [])
+            ],
+            "usage": {
+                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+            },
+        })
         yield ApiMessageCompleteEvent(
             message=assistant_message_from_api(final_message),
             usage=UsageSnapshot(

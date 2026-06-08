@@ -389,6 +389,9 @@ class OpenAICompatibleClient:
         collected_content = ""
         collected_reasoning = ""
         collected_tool_calls: dict[int, dict[str, Any]] = {}
+        _tc_id_to_key: dict[str, int] = {}  # id → key in collected_tool_calls
+        _idx_active: dict[int, int] = {}    # provider index → currently-active key
+        raw_chunks: list[dict[str, Any]] = []
         finish_reason: str | None = None
         usage_data: dict[str, int] = {}
         # Buffer to strip inline <think>…</think> blocks across streaming chunks.
@@ -400,6 +403,7 @@ class OpenAICompatibleClient:
 
         stream = await self._client.chat.completions.create(**params)
         async for chunk in stream:
+            raw_chunks.append(chunk.model_dump())
             if not chunk.choices:
                 # Usage-only chunk (some providers send this at the end)
                 if chunk.usage:
@@ -431,16 +435,29 @@ class OpenAICompatibleClient:
             # Accumulate tool calls
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in collected_tool_calls:
-                        collected_tool_calls[idx] = {
-                            "id": tc_delta.id or "",
-                            "name": "",
-                            "arguments": "",
-                        }
-                    entry = collected_tool_calls[idx]
-                    if tc_delta.id:
-                        entry["id"] = tc_delta.id
+                    provider_idx = tc_delta.index
+                    tc_id = tc_delta.id or ""
+                    if tc_id and tc_id in _tc_id_to_key:
+                        # Continuation of a known tool call (id seen before)
+                        key = _tc_id_to_key[tc_id]
+                        _idx_active[provider_idx] = key
+                    elif tc_id:
+                        # New id: check if provider is reusing this index for a new tool call
+                        active_key = _idx_active.get(provider_idx)
+                        if active_key is not None and collected_tool_calls[active_key]["id"] != tc_id:
+                            key = max(collected_tool_calls, default=-1) + 1
+                        else:
+                            key = provider_idx
+                        _tc_id_to_key[tc_id] = key
+                        _idx_active[provider_idx] = key
+                    else:
+                        # No id: route to whatever is currently active for this provider index
+                        key = _idx_active.get(provider_idx, provider_idx)
+                    if key not in collected_tool_calls:
+                        collected_tool_calls[key] = {"id": tc_id, "name": "", "arguments": ""}
+                    entry = collected_tool_calls[key]
+                    if tc_id and not entry["id"]:
+                        entry["id"] = tc_id
                     if tc_delta.function:
                         if tc_delta.function.name:
                             entry["name"] = tc_delta.function.name
@@ -455,10 +472,18 @@ class OpenAICompatibleClient:
                 }
 
         # Build the final ConversationMessage
+        from openharness.api.request_log import log_response
+        log_response("openai", {
+            "model": params.get("model"),
+            "finish_reason": finish_reason,
+            "content": collected_content,
+            "tool_calls": collected_tool_calls,
+            "usage": usage_data,
+            "raw_chunks": raw_chunks,
+        })
         content: list[ContentBlock] = []
         if collected_content:
             content.append(TextBlock(text=collected_content))
-
         for _idx in sorted(collected_tool_calls.keys()):
             tc = collected_tool_calls[_idx]
             # Skip phantom/empty tool calls that some providers send

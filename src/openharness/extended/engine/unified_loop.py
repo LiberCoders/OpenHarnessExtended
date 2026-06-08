@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from openharness.config.paths import get_data_dir
+from openharness.extended.defaults import DEFAULT_MOBILE_GUI_MAX_STEPS
 from openharness.extended.experts.mobile_gui.action_executor import ActionExecutor
 from openharness.extended.experts.mobile_gui.backends.registry import resolve_gui_backend
 from openharness.extended.experts.mobile_gui.context import MobileGuiContext
@@ -37,12 +38,6 @@ MAX_CONSECUTIVE_SOFT_FAILURES = 3
 _NON_DEVICE_ACTIONS = frozenset({ActionType.WAIT, ActionType.TERMINATE, ActionType.INTERACT})
 
 WORKER_IMPLEMENTED_EXPERT_TYPES: frozenset[str] = frozenset({"mobile_gui"})
-
-
-def _default_capability_profile(expert_type: str) -> str:
-    if expert_type == "mobile_gui":
-        return "hdc_minimal_v1"
-    return "default"
 
 
 # Must match OPENHARNESS_PARENT_SETTINGS_KEY in delegate_to_expert_tool (avoid import cycle).
@@ -86,7 +81,6 @@ class ExpertRunConfig:
     expert_type: str
     expert_id: str
     task: str
-    capability_profile: str
     max_steps: int
     device_serial: str | None
     cwd: str | None
@@ -94,15 +88,11 @@ class ExpertRunConfig:
 
     @classmethod
     def from_worker_dict(cls, raw: dict[str, Any], *, expert_type: str) -> ExpertRunConfig:
-        cap = str(raw.get("capability_profile") or "").strip()
-        if not cap:
-            cap = _default_capability_profile(expert_type)
         return cls(
             expert_type=expert_type,
             expert_id=str(raw.get("expert_id") or ""),
             task=str(raw.get("task") or ""),
-            capability_profile=cap,
-            max_steps=int(raw.get("max_steps") or 8),
+            max_steps=int(raw.get("max_steps") or DEFAULT_MOBILE_GUI_MAX_STEPS),
             device_serial=raw.get("device_serial"),
             cwd=raw.get("cwd"),
             runtime_overrides=dict(raw.get("runtime_overrides") or {}),
@@ -378,7 +368,6 @@ async def _run_expert_loop(config: ExpertRunConfig, channel) -> int:
                 "expert_id": expert_id,
                 "expert_type": config.expert_type,
                 "task": config.task,
-                "capability_profile": config.capability_profile,
                 "runtime_overrides": config.runtime_overrides,
             }
         )

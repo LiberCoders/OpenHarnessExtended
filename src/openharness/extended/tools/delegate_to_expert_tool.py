@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from openharness.config import load_settings
 from openharness.config.paths import get_config_dir, get_data_dir, get_logs_dir
+from openharness.extended.defaults import DEFAULT_MOBILE_GUI_MAX_STEPS
 from openharness.extended.channel import ExpertHandle, create_channel, get_channel_registry
 from openharness.extended.engine.unified_loop import (
     FALLBACK_EXPERT_TYPE_SLUG,
@@ -88,8 +89,16 @@ class DelegateToExpertToolInput(BaseModel):
             "Please use Chinese to briefly describe the task."
         )
     )
-    capability_profile: str = Field(default="hdc_minimal_v1")
-    max_steps: int = Field(default=8, ge=1, le=100)
+    max_steps: int = Field(
+        default=DEFAULT_MOBILE_GUI_MAX_STEPS,
+        ge=1,
+        le=100,
+        description=(
+            f"Maximum number of steps the expert may take (default: {DEFAULT_MOBILE_GUI_MAX_STEPS}). "
+            "Adjust based on task complexity — increase for multi-step workflows, "
+            "decrease for simple single-action tasks."
+        ),
+    )
     device_serial: str | None = Field(default=None)
     runtime_overrides: dict[str, Any] | None = Field(
         default=None,
@@ -152,7 +161,6 @@ class DelegateToExpertTool(BaseTool):
             "expert_id": expert_id,
             "expert_type": arguments.expert_type,
             "task": arguments.task,
-            "capability_profile": arguments.capability_profile,
             "runtime_overrides": runtime_overrides,
         }
         (state_root / "meta.json").write_text(
@@ -222,7 +230,6 @@ class DelegateToExpertTool(BaseTool):
             "expert_type": expert_type,
             "expert_id": expert_id,
             "task": arguments.task,
-            "capability_profile": arguments.capability_profile,
             "max_steps": arguments.max_steps,
             "device_serial": arguments.device_serial,
             "cwd": str(Path(context.cwd).resolve()),
@@ -243,7 +250,6 @@ class DelegateToExpertTool(BaseTool):
             process=process,
             task=arguments.task,
             metadata={
-                "capability_profile": arguments.capability_profile,
                 "state_root": state_root_str,
             },
         )

@@ -67,11 +67,11 @@ async def test_drag_uses_uinput_native_drag_with_press_and_total() -> None:
 
 
 @pytest.mark.asyncio
-async def test_type_text_uses_uinput_text_quoted_no_coordinates() -> None:
+async def test_type_text_uses_uitest_uiinput_text() -> None:
     driver, calls = _driver_with_recorded_runs()
     result = await driver.type_text("hello world")
     assert result.ok is True
-    assert calls[0] == ["shell", "uinput", "-K", "-t", "'hello world'"]
+    assert calls[0] == ["shell", "uitest", "uiInput", "text", "'hello world'"]
 
 
 @pytest.mark.asyncio

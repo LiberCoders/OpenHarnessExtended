@@ -149,7 +149,11 @@ class ExpertLoopPack:
                 if message.kind == "instruction_append":
                     extra = str(message.payload.get("text") or "").strip()
                     if extra:
-                        self.context.extra_instruction = f"{self.context.extra_instruction}\n{extra}".strip()
+                        from datetime import datetime, timezone
+                        self.context.extra_instructions.append({
+                            "instruction": extra,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
                 if message.kind == "terminate":
                     self.context.done = True
                     self.context.last_action = "terminate(external)"

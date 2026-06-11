@@ -496,10 +496,10 @@ class OpenAICompatBackend(GuiInferenceBackend):
         # history entries: {tool_calls (list of native dicts), content,
         # image_path, result_texts (list aligned to tool_calls), extra_injected}
         self._history: list[dict[str, Any]] = []
-        # The accumulated extra_instruction already placed in the timeline. A
-        # later append only adds its new suffix as a fresh user turn, so the
+        # Number of extra_instructions entries already placed in the timeline.
+        # A new append only injects the tail slice as a fresh user turn, so the
         # message prefix stays byte-stable for KV-cache reuse.
-        self._injected_extra = ""
+        self._injected_extra_count = 0
         self._http_client = httpx.Client(verify=self._tls_verify, timeout=120.0)
         self._client = OpenAI(
             api_key=self._api_key,
@@ -521,15 +521,12 @@ class OpenAICompatBackend(GuiInferenceBackend):
             ]
 
         instruction = self._instruction or context.task
-        # extra_instruction is an append-only accumulation. Inject only the new
-        # suffix as a fresh user turn this step — never fold it into the prefix,
-        # which would invalidate the KV-cache for every earlier turn.
-        full_extra = context.extra_instruction.strip()
-        if full_extra.startswith(self._injected_extra):
-            new_extra = full_extra[len(self._injected_extra) :].strip()
-        else:
-            new_extra = full_extra  # not a clean append; replay the whole thing
-        self._injected_extra = full_extra
+        # extra_instructions is an append-only list. Inject only the new tail
+        # as a fresh user turn this step — never fold into the prefix, which
+        # would invalidate the KV-cache for every earlier turn.
+        new_items = context.extra_instructions[self._injected_extra_count:]
+        self._injected_extra_count = len(context.extra_instructions)
+        new_extra = "\n".join(item["instruction"] for item in new_items).strip()
 
         messages = self._build_messages(
             current_image_path=observation.screenshot_path,
@@ -756,7 +753,7 @@ class OpenAICompatBackend(GuiInferenceBackend):
                 "coordinate_space": self._coordinate_space,
                 "history_len": len(self._history),
                 "instruction": instruction,
-                "extra_instruction": context.extra_instruction,
+                "extra_instructions": context.extra_instructions,
                 "request": request_log,
             }
             (step_dir / "requests.json").write_text(

@@ -90,7 +90,7 @@ def test_parse_key_maps_home_back_and_passthrough() -> None:
 def test_parse_terminate_and_home_back() -> None:
     b = _backend()
     term = b.parse_action(_ir("terminate", {"status": "success", "message": "done"}))[0]
-    assert term.action == ActionType.TERMINATE and term.status == "success" and term.message == "done"
+    assert term.action == ActionType.TERMINATE and term.status == "success" and term.text == "done"
     assert b.parse_action(_ir("home", {}))[0].action == ActionType.HOME
     assert b.parse_action(_ir("back", {}))[0].action == ActionType.BACK
 
@@ -331,12 +331,12 @@ async def test_infer_injects_only_new_extra_suffix(tmp_path: Path) -> None:
     obs = Observation(screenshot_path=str(png))
     ctx = MobileGuiContext(task="t")
 
-    ctx.extra_instruction = "A"
+    ctx.extra_instructions.append({"instruction": "A", "timestamp": "2024-01-01T00:00:00+00:00"})
     await b.infer(context=ctx, observation=obs)
     assert b._history[0]["extra_injected"] == "A"
 
-    # Leader appended "B"; the accumulated value is "A\nB" — only "B" is new.
-    ctx.extra_instruction = "A\nB"
+    # Leader appended "B"; only the new entry is injected this step.
+    ctx.extra_instructions.append({"instruction": "B", "timestamp": "2024-01-01T00:01:00+00:00"})
     await b.infer(context=ctx, observation=obs)
     assert b._history[1]["extra_injected"] == "B"
 

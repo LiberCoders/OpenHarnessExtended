@@ -15,7 +15,9 @@ class MobileGuiContext:
     # Primary goal assigned when the worker starts.
     task: str
     # Runtime-appended guidance sent from leader via instruction_append.
-    extra_instruction: str = ""
+    # Each entry: {"instruction": str, "timestamp": str (ISO-8601 UTC)}.
+    # Backends read only the "instruction" field; "timestamp" is for auditing.
+    extra_instructions: list[dict] = field(default_factory=list)
 
     # Loop progress
     step: int = 0

@@ -82,8 +82,9 @@ class GuiPlusBackend(GuiInferenceBackend):
         self, *, context: MobileGuiContext, observation: Observation
     ) -> InferResult:
         current_instruction = self._instruction or context.task
-        if context.extra_instruction.strip():
-            current_instruction = f"{current_instruction}\n补充要求：{context.extra_instruction.strip()}"
+        if context.extra_instructions:
+            all_extra = "\n".join(item["instruction"] for item in context.extra_instructions)
+            current_instruction = f"{current_instruction}\n补充要求：{all_extra}"
         messages = self._build_messages(
             current_image_path=observation.screenshot_path,
             instruction=current_instruction,
@@ -306,7 +307,7 @@ class GuiPlusBackend(GuiInferenceBackend):
                 "history_len": len(self._history),
                 "today_override": self._today_override,
                 "instruction": instruction,
-                "extra_instruction": context.extra_instruction,
+                "extra_instructions": context.extra_instructions,
                 "request": truncate_for_log(request_payload),
             }
             (step_dir / "requests.json").write_text(

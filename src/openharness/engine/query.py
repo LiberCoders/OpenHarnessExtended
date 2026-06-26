@@ -258,6 +258,15 @@ def _tool_metadata_bucket(
     return replacement
 
 
+def _api_tool_schemas_for_model(context: QueryContext) -> list[dict[str, Any]]:
+    """Return tool schemas visible to the model for this request."""
+    return [
+        tool.to_api_schema()
+        for tool in context.tool_registry.list_tools()
+        if not context.permission_checker.is_tool_explicitly_denied(tool.name)
+    ]
+
+
 def _remember_read_file(
     tool_metadata: dict[str, object] | None,
     *,
@@ -751,7 +760,7 @@ async def run_query(
                     messages=messages,
                     system_prompt=context.system_prompt,
                     max_tokens=effective_max_tokens,
-                    tools=context.tool_registry.to_api_schema(),
+                    tools=_api_tool_schemas_for_model(context),
                     effort=context.effort,
                 )
             ):

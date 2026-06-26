@@ -84,6 +84,10 @@ class PermissionChecker:
                     rule,
                 )
 
+    def is_tool_explicitly_denied(self, tool_name: str) -> bool:
+        """Return whether a tool is globally denied by name."""
+        return tool_name in self._settings.denied_tools
+
     def evaluate(
         self,
         tool_name: str,
@@ -110,7 +114,7 @@ class PermissionChecker:
                         )
 
         # Explicit tool deny list
-        if tool_name in self._settings.denied_tools:
+        if self.is_tool_explicitly_denied(tool_name):
             return PermissionDecision(allowed=False, reason=f"{tool_name} is explicitly denied")
 
         # Explicit tool allow list

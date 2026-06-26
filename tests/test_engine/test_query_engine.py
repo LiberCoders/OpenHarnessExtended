@@ -1199,6 +1199,35 @@ class _BoomTool(BaseTool):
 
 
 @pytest.mark.asyncio
+async def test_query_engine_hides_denied_tools_from_model_schema(tmp_path: Path):
+    registry = ToolRegistry()
+    registry.register(_OkTool())
+    registry.register(_BoomTool())
+    api_client = RecordingApiClient()
+
+    engine = QueryEngine(
+        api_client=api_client,
+        tool_registry=registry,
+        permission_checker=PermissionChecker(
+            PermissionSettings(
+                mode=PermissionMode.FULL_AUTO,
+                denied_tools=["boom_tool"],
+            )
+        ),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="system",
+    )
+
+    events = [event async for event in engine.submit_message("what tools are available?")]
+
+    assert any(isinstance(event, AssistantTurnComplete) for event in events)
+    assert len(api_client.requests) == 1
+    tool_names = {tool["name"] for tool in api_client.requests[0].tools}
+    assert tool_names == {"ok_tool"}
+
+
+@pytest.mark.asyncio
 async def test_query_engine_synthesizes_tool_result_when_single_tool_raises(tmp_path: Path):
     registry = ToolRegistry()
     registry.register(_BoomTool())

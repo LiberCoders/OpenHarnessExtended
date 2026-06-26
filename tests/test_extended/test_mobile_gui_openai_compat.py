@@ -90,7 +90,9 @@ def test_parse_key_maps_home_back_and_passthrough() -> None:
 def test_parse_terminate_and_home_back() -> None:
     b = _backend()
     term = b.parse_action(_ir("terminate", {"status": "success", "message": "done"}))[0]
-    assert term.action == ActionType.TERMINATE and term.status == "success" and term.message == "done"
+    assert term.action == ActionType.TERMINATE
+    assert term.status == "success"
+    assert term.text == "done"
     assert b.parse_action(_ir("home", {}))[0].action == ActionType.HOME
     assert b.parse_action(_ir("back", {}))[0].action == ActionType.BACK
 

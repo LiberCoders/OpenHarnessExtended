@@ -11,6 +11,11 @@ import pytest
 from openharness.config.settings import Settings
 from openharness.utils.shell import _bash_is_usable, create_shell_subprocess, resolve_shell_command
 
+_POWERSHELL_UTF8_PREFIX = (
+    "$env:PYTHONUTF8='1'; "
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+)
+
 
 def test_resolve_shell_command_prefers_bash_on_linux(monkeypatch):
     monkeypatch.setattr(
@@ -55,7 +60,7 @@ def test_resolve_shell_command_uses_powershell_on_windows(monkeypatch):
         "-NoLogo",
         "-NoProfile",
         "-Command",
-        "Write-Output hi",
+        f"{_POWERSHELL_UTF8_PREFIX}Write-Output hi",
     ]
 
 
@@ -106,7 +111,7 @@ def test_resolve_shell_command_windows_skips_unusable_bash(monkeypatch):
         "-NoLogo",
         "-NoProfile",
         "-Command",
-        "Write-Output hi",
+        f"{_POWERSHELL_UTF8_PREFIX}Write-Output hi",
     ]
 
 

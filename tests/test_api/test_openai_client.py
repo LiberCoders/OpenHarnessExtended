@@ -229,6 +229,15 @@ class _FakeChunk:
         self.choices = []
         self.usage = _FakeUsage()
 
+    def model_dump(self) -> dict[str, object]:
+        return {
+            "choices": self.choices,
+            "usage": {
+                "prompt_tokens": self.usage.prompt_tokens,
+                "completion_tokens": self.usage.completion_tokens,
+            },
+        }
+
 
 class _FakeCompletions:
     def __init__(self) -> None:

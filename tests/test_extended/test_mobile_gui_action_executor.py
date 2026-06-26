@@ -68,18 +68,15 @@ async def test_run_records_driver_result_on_click_success() -> None:
     context = MobileGuiContext(task="test")
     executor = ActionExecutor(driver=_FakeDriver(click_ok=True))  # type: ignore[arg-type]
 
-    results = await executor.run(
-        [GuiAction(action=ActionType.CLICK, x=100, y=200, message="tap")], context
-    )
+    results = await executor.run([GuiAction(action=ActionType.CLICK, x=100, y=200)], context)
 
     assert len(results) == 1 and results[0].device_result.ok is True
     assert context.last_action == "click(100,200)"
     assert "click(100,200): ok" in context.last_message
-    assert "cmd[1]=hdc shell uinput -T -c 100 200" in context.last_message
-    assert "exit_code[1]=0" in context.last_message
-    assert "stdout[1]=ok-output" in context.last_message
-    assert "stderr[1]=(empty)" in context.last_message
-    assert "note=tap" in context.last_message
+    assert "cmd=hdc shell uinput -T -c 100 200" in context.last_message
+    assert "exit_code=0" in context.last_message
+    assert "stdout=ok-output" in context.last_message
+    assert "stderr=(empty)" in context.last_message
     # Structured results are exposed on the context for the backend to read.
     assert context.last_results == results
 
@@ -95,8 +92,8 @@ async def test_run_soft_failure_is_recorded_without_raising() -> None:
     assert len(results) == 1
     assert results[0].device_result.ok is False
     assert context.last_action == "click(100,200):failed"
-    assert "exit_code[1]=1" in context.last_message
-    assert "stderr[1]=click failed" in context.last_message
+    assert "exit_code=1" in context.last_message
+    assert "stderr=click failed" in context.last_message
     assert context.last_results == results
 
 
@@ -143,7 +140,7 @@ async def test_run_terminate_sets_done_and_returns_no_results() -> None:
     executor = ActionExecutor(driver=_ClickOnlyDriver())
 
     results = await executor.run(
-        [GuiAction(action=ActionType.TERMINATE, status="success", message="done")], context
+        [GuiAction(action=ActionType.TERMINATE, status="success", text="done")], context
     )
 
     assert context.done is True
@@ -174,6 +171,7 @@ def test_dispatch_covers_all_action_types() -> None:
 @pytest.mark.asyncio
 async def test_adb_drag_uses_draganddrop() -> None:
     driver = AdbMobileDeviceDriver(cwd=Path("."), exec_path="adb")
+    captured: dict[str, str] = {}
 
     async def fake_run_shell(body: str) -> DeviceCommandResult:
         captured["body"] = body

@@ -59,6 +59,9 @@ async def test_run_print_mode_passes_cwd_to_build_runtime(monkeypatch):
     async def _build_runtime(**kwargs):
         seen.update(kwargs)
         return SimpleNamespace(
+            current_settings=lambda: SimpleNamespace(
+                print_mode=SimpleNamespace(stream_json_extra_fields=[]),
+            ),
             app_state=SimpleNamespace(get=lambda: None),
             mcp_manager=SimpleNamespace(list_statuses=lambda: []),
             commands=SimpleNamespace(list_commands=lambda: []),
@@ -243,7 +246,11 @@ async def test_run_print_mode_waits_for_coordinator_async_agents(monkeypatch):
             external_api_client=False,
             extra_skill_dirs=(),
             extra_plugin_roots=(),
-            current_settings=lambda: SimpleNamespace(model="claude-test", max_turns=200),
+            current_settings=lambda: SimpleNamespace(
+                model="claude-test",
+                max_turns=200,
+                print_mode=SimpleNamespace(stream_json_extra_fields=[]),
+            ),
             current_plugins=lambda: [],
             hook_summary=lambda: "",
             plugin_summary=lambda: "",

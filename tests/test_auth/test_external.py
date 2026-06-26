@@ -32,6 +32,21 @@ def _fake_jwt(payload: dict[str, object]) -> str:
     return f"{_b64url({'alg': 'none', 'typ': 'JWT'})}.{_b64url(payload)}.sig"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENHARNESS_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_BASE_URL",
+        "OPENHARNESS_MODEL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_load_codex_external_credential(monkeypatch, tmp_path: Path):
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
